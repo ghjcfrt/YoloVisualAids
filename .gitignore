@@ -1,0 +1,54 @@
+# Python cache / build
+__pycache__/
+*.py[cod]
+*.pyd
+*.so
+.build/
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+
+# Dependency / tooling caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Logs
+logs/
+*.log
+
+# Environment variables
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE/editor
+.vscode/
+.idea/
+*.code-workspace
+
+# Project outputs
+results/
+runs/
+output/
+
+# Model weights
+*.pt
+
+# Data 
+data/
+datasets/
+
+# Test
+test.py
