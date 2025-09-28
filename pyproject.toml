@@ -6,4 +6,26 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "ultralytics>=8.3.203",
+    "python-multipart>=0.0.20",
+    "PySide6>=6.7.0",
+    "torch==2.5.1+cu121",
+    "torchvision==0.20.1+cu121",
+    "pywin32>=311",
 ]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+
+[[tool.uv.index]]
+name = "pytorch-cu121"
+url = "https://download.pytorch.org/whl/cu121"
+
+[tool.uv.sources]
+# 为 torch/torchvision 指定 CUDA 12.1 索引，其他包默认走 pypi
+torch = { index = "pytorch-cu121" }
+torchvision = { index = "pytorch-cu121" }
+# 强制 MarkupSafe 从 PyPI 获取，避免去 pytorch-cu121
+markupsafe = { index = "pypi" }
+
+

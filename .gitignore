@@ -42,6 +42,9 @@ Thumbs.db
 results/
 runs/
 output/
+Log/
+crops/
+traffic_img/
 
 # Model weights
 *.pt
@@ -52,3 +55,6 @@ datasets/
 
 # Test
 test.py
+test1.py
+test2.py
+README_CN_pyorbbecsdk.md
