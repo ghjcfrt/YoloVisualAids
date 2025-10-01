@@ -17,17 +17,27 @@
 """
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import sys
 from dataclasses import asdict, dataclass
-from typing import Iterable, List, Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # 仅类型检查时导入，避免运行时开销
+    from collections.abc import Iterable
 
 try:  # 允许在非 Windows 或未安装 pywin32 时被 import 而不立刻崩溃
-    import win32com.client  # type: ignore
-except Exception:  # pragma: no cover
-    win32com = None  # type: ignore
+    import win32com.client
+except ImportError:  # pragma: no cover
+    win32com = None
 
+# 可选导入 COM 错误类型，以便更精确地捕获异常
+_ComError: type[BaseException] | None
+try:  # pragma: no cover - 非 Windows 环境可能缺失
+    from pywintypes import com_error as _ComError
+except ImportError:  # pragma: no cover
+    _ComError = None
 KEYWORD_PATTERN = re.compile(r"(camera|webcam|uvc|video)", re.IGNORECASE)
 
 
@@ -35,10 +45,10 @@ KEYWORD_PATTERN = re.compile(r"(camera|webcam|uvc|video)", re.IGNORECASE)
 class CameraDeviceInfo:
     index: int                 # 逻辑排序索引(非系统/非 OpenCV index，仅枚举顺序)
     name: str                  # 设备名称（保证非 None，取不到时为空串）
-    pnp_class: Optional[str]   # PNPClass (Camera / Image / 其它)
-    status: Optional[str]      # 设备状态（OK 等）
-    device_id: Optional[str]   # PNP DeviceID
-    description: Optional[str] # Description 字段（可能为空）
+    pnp_class: str | None      # PNPClass (Camera / Image / 其它)
+    status: str | None         # 设备状态（OK 等）
+    device_id: str | None      # PNP DeviceID
+    description: str | None    # Description 字段（可能为空）
     source: str                # 'PNPClass' or 'KeywordFallback'
 
     def to_dict(self):
@@ -51,7 +61,8 @@ class CameraEnumError(RuntimeError):
 
 def _connect_wmi():
     if win32com is None:
-        raise CameraEnumError("win32com 未安装，无法执行 WMI 查询。请安装 pywin32 或在 Windows 环境下运行。")
+        msg = "win32com 未安装，无法执行 WMI 查询。请安装 pywin32 或在 Windows 环境下运行。"
+        raise CameraEnumError(msg)
     locator = win32com.client.Dispatch("WbemScripting.SWbemLocator")
     return locator.ConnectServer('.', 'root\\cimv2')
 
@@ -73,53 +84,82 @@ def _fallback_query() -> Iterable:
     return _exec_query(svc, "SELECT DeviceID, Name, Description, Status, PNPClass FROM Win32_PnPEntity")
 
 
-def enumerate_cameras(only_working: bool = True, verbose: bool | None = None) -> List[CameraDeviceInfo]:
+def _env_verbose(*, verbose: bool | None) -> bool:
+    if verbose is not None:
+        return verbose
+    return os.environ.get("CAM_VERBOSE", "0") not in {"0", "false", "False", ""}
+
+
+def _wmi_error_types() -> tuple[type[BaseException], ...]:
+    errs: tuple[type[BaseException], ...] = (OSError, AttributeError, RuntimeError)
+    if _ComError is not None:
+        errs = (*errs, _ComError)
+    return errs
+
+
+def _query_primary_devices(wmi_errs: tuple[type[BaseException], ...], *, verbose: bool) -> list[CameraDeviceInfo]:
+    try:
+        primary = list(_primary_query())
+    except wmi_errs as e:  # pragma: no cover
+        if verbose:
+            print("[camera_devices] Primary WMI 查询失败:", repr(e), file=sys.stderr)
+        return []
+    if not primary:
+        return []
+    if verbose:
+        print(f"[camera_devices] Primary 匹配 {len(primary)} 个设备")
+    return [_to_info(i, d, source="PNPClass") for i, d in enumerate(primary)]
+
+
+def _query_keyword_fallback_devices(
+    wmi_errs: tuple[type[BaseException], ...], *, verbose: bool
+) -> list[CameraDeviceInfo]:
+    fallback = []
+    try:
+        fallback = list(_fallback_query())
+    except wmi_errs as e:  # pragma: no cover
+        if verbose:
+            print("[camera_devices] Fallback WMI 查询失败:", repr(e), file=sys.stderr)
+        return []
+    devices: list[CameraDeviceInfo] = []
+    for d in fallback:
+        name = getattr(d, "Name", "") or ""
+        if name and KEYWORD_PATTERN.search(name):
+            devices.append(_to_info(len(devices), d, source="KeywordFallback"))
+    if verbose:
+        print(f"[camera_devices] Keyword 回退匹配 {len(devices)} 个设备")
+    return devices
+
+
+def _filter_only_working(devices: list[CameraDeviceInfo], *, verbose: bool) -> list[CameraDeviceInfo]:
+    filtered: list[CameraDeviceInfo] = []
+    for dev in devices:
+        st = (dev.status or "").upper()
+        if (not st) or (st == "OK") or ("WORKING" in st):
+            filtered.append(dev)
+    if verbose:
+        print(f"[camera_devices] 过滤后剩余 {len(filtered)} 个设备")
+    return filtered
+
+
+def enumerate_cameras(*, only_working: bool = True, verbose: bool | None = None) -> list[CameraDeviceInfo]:
     """返回摄像头设备列表。
 
-    Parameters
+    参数：
     ----------
     only_working : bool
         是否仅保留状态为 OK/Working 的设备。
     verbose : Optional[bool]
         详细输出；若为 None，则读取环境变量 CAM_VERBOSE。
     """
-    if verbose is None:
-        verbose = os.environ.get("CAM_VERBOSE", "0") not in ("0", "false", "False", "")
-    devices: List[CameraDeviceInfo] = []
-    try:
-        primary = list(_primary_query())
-    except Exception as e:  # pragma: no cover
-        if verbose:
-            print("[camera_devices] Primary WMI 查询失败:", repr(e), file=sys.stderr)
-        primary = []
-    if primary:
-        if verbose:
-            print(f"[camera_devices] Primary 匹配 {len(primary)} 个设备")
-        for idx, d in enumerate(primary):
-            devices.append(_to_info(idx, d, source='PNPClass'))
-    else:
-        # 关键词回退
-        fallback = []
-        try:
-            fallback = list(_fallback_query())
-        except Exception as e:  # pragma: no cover
-            if verbose:
-                print("[camera_devices] Fallback WMI 查询失败:", repr(e), file=sys.stderr)
-        for d in fallback:
-            name = getattr(d, 'Name', '') or ''
-            if name and KEYWORD_PATTERN.search(name):
-                devices.append(_to_info(len(devices), d, source='KeywordFallback'))
-        if verbose:
-            print(f"[camera_devices] Keyword 回退匹配 {len(devices)} 个设备")
+    vb = _env_verbose(verbose=verbose)
+    wmi_errs = _wmi_error_types()
+
+    devices = _query_primary_devices(wmi_errs, verbose=vb)
+    if not devices:
+        devices = _query_keyword_fallback_devices(wmi_errs, verbose=vb)
     if only_working:
-        filtered = []
-        for dev in devices:
-            st = (dev.status or '').upper()
-            if (not st) or st in ("OK",) or "WORKING" in st:
-                filtered.append(dev)
-        devices = filtered
-        if verbose:
-            print(f"[camera_devices] 过滤后剩余 {len(devices)} 个设备")
+        devices = _filter_only_working(devices, verbose=vb)
     return devices
 
 
@@ -136,7 +176,7 @@ def _to_info(idx: int, d, source: str) -> CameraDeviceInfo:
     )
 
 
-def print_cameras(verbose: bool | None = None, only_working: bool = True) -> int:
+def print_cameras(*, verbose: bool | None = None, only_working: bool = True) -> int:
     cams = enumerate_cameras(only_working=only_working, verbose=verbose)
     if not cams:
         print("(无摄像头设备)")
@@ -146,8 +186,7 @@ def print_cameras(verbose: bool | None = None, only_working: bool = True) -> int
     return 0
 
 
-def main(argv: Optional[list[str]] = None) -> int:  # CLI 支持
-    import argparse
+def main(argv: list[str] | None = None) -> int:  # CLI 支持
     parser = argparse.ArgumentParser(description="列出本机摄像头设备 (WMI)")
     parser.add_argument('--all', action='store_true', help='包含状态非 OK 的设备')
     parser.add_argument('--verbose', action='store_true', help='输出调试信息')

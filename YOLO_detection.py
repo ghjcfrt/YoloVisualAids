@@ -1,14 +1,17 @@
 import argparse
 import os
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
-from typing import Any, Optional, Union
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 import cv2
 import torch
 from ultralytics import YOLO
 
 from color_detction import detect_traffic_light_color
+from visual_styles import TL_COLOR_MAP, TL_STATE_CN
 
 #############################################
 # 配置区
@@ -20,6 +23,16 @@ from color_detction import detect_traffic_light_color
 
 
 ENV_PREFIX = "YV_"  # 环境变量前缀，例如 YV_MODEL_PATH
+
+# 常量
+TRAFFIC_LIGHT_CLASS_ID = 9
+MIN_ROI_SIDE = 8
+READ_FAIL_LIMIT = 10
+LABEL_Y_OFFSET = 6
+TEXT_MARGIN_MIN = 10
+MAX_INDEX_DIGITS = 6
+
+# 展示层样式从 visual_styles 引入（保持算法模块纯粹）
 
 
 def _env(name: str, default: Any) -> Any:
@@ -33,14 +46,18 @@ def _as_bool(val: Any) -> bool:
     return str(val).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _as_optional_int_list(val: str | None) -> Optional[list[int]]:
-    if val in (None, "", "none", "null"):  # 允许不设置
+def _as_optional_int_list(val: str | None) -> list[int] | None:
+    if val is None:
+        return None
+    low = val.strip().lower()
+    if low in {"", "none", "null"}:  # 允许不设置
         return None
     parts = [p.strip() for p in val.split(',') if p.strip()]
     out: list[int] = []
     for p in parts:
         if not p.isdigit():
-            raise ValueError(f"IMG_SIZE 环境变量/参数包含非整数: {p}")
+            msg = f"IMG_SIZE 环境变量/参数包含非整数: {p}"
+            raise ValueError(msg)
         out.append(int(p))
     return out
 
@@ -52,18 +69,18 @@ class YOLOConfig:
     device: str = field(default_factory=lambda: _env("DEVICE", "auto"))
 
     # 运行输入输出
-    source: Union[int, str] = field(default_factory=lambda: _parse_source(_env("SOURCE", "0")))
+    source: int | str = field(default_factory=lambda: _parse_source(_env("SOURCE", "0")))
     save_dir: str = field(default_factory=lambda: _env("SAVE_DIR", "results"))
-    save_txt: bool = field(default_factory=lambda: _as_bool(_env("SAVE_TXT", False)))
+    save_txt: bool = field(default_factory=lambda: _as_bool(_env("SAVE_TXT", default=False)))
 
     # 摄像头选择（仅启动时）
-    select_camera: bool = field(default_factory=lambda: _as_bool(_env("SELECT_CAMERA", False)))  # 启动时交互选择摄像头
+    select_camera: bool = field(default_factory=lambda: _as_bool(_env("SELECT_CAMERA", default=False)))  # 启动时交互选择摄像头
     max_cam_index: int = field(default_factory=lambda: int(_env("MAX_CAM_INDEX", 8)))  # 枚举最大索引（0~N-1）
 
     # 推理参数
     conf: float = field(default_factory=lambda: float(_env("CONF", 0.5)))
     # 输入尺寸；为空(None) 时表示使用原始帧尺寸而不是模型的默认缩放尺寸
-    img_size: Optional[list[int]] = field(default_factory=lambda: _as_optional_int_list(_env("IMG_SIZE", "")))  # 例如: "640" 或 "640,640"
+    img_size: list[int] | None = field(default_factory=lambda: _as_optional_int_list(_env("IMG_SIZE", "")))  # 例如: "640" 或 "640,640"
 
     # 界面与输出细节
     window_name: str = field(default_factory=lambda: _env("WINDOW_NAME", "YOLOv11 Detection"))
@@ -71,9 +88,9 @@ class YOLOConfig:
     exit_key: str = field(default_factory=lambda: _env("EXIT_KEY", "q"))
 
     # 额外可选：是否显示 FPS / 统计
-    show_fps: bool = field(default_factory=lambda: _as_bool(_env("SHOW_FPS", True)))
+    show_fps: bool = field(default_factory=lambda: _as_bool(_env("SHOW_FPS", default=True)))
     # OpenCV 日志抑制（降低无摄像头时的错误输出噪声）
-    quiet_cv: bool = field(default_factory=lambda: _as_bool(_env("QUIET_CV", True)))
+    quiet_cv: bool = field(default_factory=lambda: _as_bool(_env("QUIET_CV", default=True)))
     # 枚举摄像头连续失败上限（用于提前终止枚举）
     cam_fail_limit: int = field(default_factory=lambda: int(_env("CAM_FAIL_LIMIT", 3)))
 
@@ -81,15 +98,15 @@ class YOLOConfig:
         return asdict(self)
 
 
-def _parse_source(raw: str) -> Union[int, str]:
+def _parse_source(raw: str) -> int | str:
     # 纯数字且长度<6 认为是摄像头索引
-    if raw.isdigit() and len(raw) < 6:
+    if raw.isdigit() and len(raw) < MAX_INDEX_DIGITS:
         return int(raw)
     return raw
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="YOLOv11 实时检测配置参数") 
+    parser = argparse.ArgumentParser(description="YOLOv11 实时检测配置参数")
     parser.add_argument("--model", dest="model_path", help="模型权重路径 (默认: yolo11n.pt)")
     parser.add_argument("--device", dest="device", help="运行设备: cuda / cpu / mps / auto")
     parser.add_argument("--source", dest="source", help="视频源: 摄像头索引或视频文件路径")
@@ -109,7 +126,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def load_config_from_args(argv: Optional[list[str]] = None) -> YOLOConfig:
+def load_config_from_args(argv: list[str] | None = None) -> YOLOConfig:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     cfg = YOLOConfig()  # 先加载默认+环境
@@ -148,28 +165,134 @@ class YOLODetector:
         self.cfg = cfg
         self.device = _select_device(cfg.device)
         self.model: YOLO = YOLO(cfg.model_path)
+        # FPS 相关状态
+        self._last_time = datetime.now(UTC)
+        self._fps = 0.0
 
-    def detect_and_save(self, stop_event: Optional[Any] = None):
+    def _quiet_opencv_logs(self) -> None:
+        """按需抑制 OpenCV 日志（兼容不同版本）。"""
+        if not self.cfg.quiet_cv:
+            return
+        # 尽量避免 try-except-pass，使用最小范围的 suppress
+        utils_mod = getattr(cv2, 'utils', None)
+        logging_mod = getattr(utils_mod, 'logging', None) if utils_mod else None
+        set_level = getattr(logging_mod, 'setLogLevel', None) if logging_mod else None
+        level_const = getattr(logging_mod, 'LOG_LEVEL_SILENT', None) if logging_mod else None
+        if callable(set_level) and level_const is not None:
+            try:
+                set_level(level_const)
+            except (cv2.error, RuntimeError) as err:  # 记录一次即可
+                print(f"[警告] 设置 OpenCV 日志等级失败: {err}")
+
+    def _predict(self, frame) -> tuple[Any, Any]:
+        """执行模型推理，返回 (result, annotated_frame)。"""
         cfg = self.cfg
-        os.makedirs(cfg.save_dir, exist_ok=True)
+        if cfg.img_size is not None:
+            results = self.model.predict(
+                frame,
+                imgsz=cfg.img_size,
+                conf=cfg.conf,
+                device=self.device,
+                verbose=False,
+            )
+        else:
+            h, w = frame.shape[:2]
+            results = self.model.predict(
+                frame,
+                imgsz=[h, w],
+                conf=cfg.conf,
+                device=self.device,
+                verbose=False,
+            )
+        result = results[0]
+        annotated_frame = result.plot()
+        return result, annotated_frame
+
+    def _annotate_traffic_lights(self, frame, result, annotated_frame, frame_id: int) -> None:
+        """检测交通灯并标注、裁剪保存。"""
+        h_img, w_img = frame.shape[:2]
+        for bi, box in enumerate(getattr(result, 'boxes', [])):
+            # 提取类别
+            try:
+                cls_id = int(box.cls.item())
+            except (AttributeError, ValueError, TypeError) as err:
+                print(f"[警告] 无法解析类别: {err}")
+                continue
+            if cls_id != TRAFFIC_LIGHT_CLASS_ID:
+                continue
+            # 坐标
+            try:
+                coords = box.xyxy[0].tolist()
+            except (AttributeError, ValueError, TypeError, IndexError) as err:
+                print(f"[警告] 无法解析边界框: {err}")
+                continue
+            # 裁剪并限制边界
+            bound = (
+                max(0, min(w_img - 1, int(coords[0]))),
+                max(0, min(h_img - 1, int(coords[1]))),
+                max(0, min(w_img, int(coords[2]))),
+                max(0, min(h_img, int(coords[3]))),
+            )
+            if bound[2] <= bound[0] or bound[3] <= bound[1]:
+                continue
+            roi = frame[bound[1]:bound[3], bound[0]:bound[2]]
+            if roi.size == 0 or roi.shape[0] < MIN_ROI_SIDE or roi.shape[1] < MIN_ROI_SIDE:
+                continue
+            # 颜色判别与标注
+            tl_state = detect_traffic_light_color(roi)
+            cv2.putText(
+                annotated_frame,
+                TL_STATE_CN.get(tl_state, '未知'),
+                (bound[0], max(TEXT_MARGIN_MIN, bound[1] - LABEL_Y_OFFSET)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                TL_COLOR_MAP.get(tl_state, (255, 255, 255)),
+                2,
+                lineType=cv2.LINE_AA,
+            )
+            # 保存裁剪
+            self._save_tl_crop(roi, frame_id, bi, tl_state)
+
+    def _save_tl_crop(self, roi, frame_id: int, bi: int, tl_state: str) -> None:
+        tl_dir = Path(self.cfg.save_dir) / 'traffic_lights'
+        tl_dir.mkdir(parents=True, exist_ok=True)
+        crop_name = f"tl_{frame_id}_{bi}_{datetime.now(UTC).strftime(self.cfg.timestamp_fmt)}_{tl_state}.jpg"
+        try:
+            cv2.imwrite(str(tl_dir / crop_name), roi)
+        except (cv2.error, OSError) as err:
+            print(f"[警告] 保存交通灯裁剪失败: {err}")
+
+    def _update_and_draw_fps(self, annotated_frame) -> None:
+        if not self.cfg.show_fps:
+            return
+        now = datetime.now(UTC)
+        dt = (now - self._last_time).total_seconds()
+        self._last_time = now
+        if dt > 0:
+            self._fps = 0.9 * self._fps + 0.1 * (1.0 / dt) if self._fps > 0 else 1.0 / dt
+        cv2.putText(annotated_frame, f"FPS: {self._fps:.2f}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+    def _save_result(self, frame_id: int, annotated_frame, result) -> None:
+        ts = datetime.now(UTC).strftime(self.cfg.timestamp_fmt)
+        base_name = f'frame_{frame_id}_{ts}'
+        cv2.imwrite(str(Path(self.cfg.save_dir) / f"{base_name}.jpg"), annotated_frame)
+        if self.cfg.save_txt:
+            txt_path = Path(self.cfg.save_dir) / f"{base_name}.txt"
+            with txt_path.open('w', encoding='utf-8') as f:
+                for line in _format_boxes_yolo(result):
+                    f.write(line)
+
+    def detect_and_save(self, stop_event: Any | None = None):
+        cfg = self.cfg
+        Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
         # 可选抑制 OpenCV 日志（仅在本进程）
-        if cfg.quiet_cv:
-            try:  # 兼容不同 OpenCV 版本
-                utils_mod = getattr(cv2, 'utils', None)
-                logging_mod = getattr(utils_mod, 'logging', None) if utils_mod else None
-                set_level = getattr(logging_mod, 'setLogLevel', None) if logging_mod else None
-                level_const = getattr(logging_mod, 'LOG_LEVEL_SILENT', None) if logging_mod else None
-                if callable(set_level) and level_const is not None:
-                    set_level(level_const)
-            except Exception:  # pragma: no cover
-                pass
+        self._quiet_opencv_logs()
         cap = cv2.VideoCapture(cfg.source)
         if not cap.isOpened():
-            raise RuntimeError(f"无法打开视频源： {cfg.source}")
+            msg = f"无法打开视频源： {cfg.source}"
+            raise RuntimeError(msg)
 
         frame_id = 0
-        last_time = datetime.now()
-        fps = 0.0
 
         while True:
             if stop_event is not None and getattr(stop_event, 'is_set', lambda: False)():
@@ -179,128 +302,26 @@ class YOLODetector:
                 # 连续读取失败处理：允许短暂失败（如摄像头热插拔）
                 fail = getattr(self, '_read_fail_count', 0) + 1
                 self._read_fail_count = fail
-                if fail >= 10:
+                if fail >= READ_FAIL_LIMIT:
                     print(f"[错误] 连续 {fail} 次无法读取帧，结束检测。")
                     break
-                # 小延迟（可选）: 不引入 sleep 以保持响应
                 continue
-            else:
-                if hasattr(self, '_read_fail_count'):
-                    self._read_fail_count = 0
+            if hasattr(self, '_read_fail_count'):
+                self._read_fail_count = 0
 
-            # 推理: 若未指定 img_size 则使用当前帧原始尺寸 (保持分辨率)，否则使用用户设定尺寸
-            if cfg.img_size is not None:
-                results = self.model.predict(
-                    frame,
-                    imgsz=cfg.img_size,
-                    conf=cfg.conf,
-                    device=self.device,
-                    verbose=False,
-                )
-            else:
-                h, w = frame.shape[:2]
-                # 使用 [h, w] 让 ultralytics 以原始分辨率为目标进行 letterbox（会自动适配 stride）
-                results = self.model.predict(
-                    frame,
-                    imgsz=[h, w],
-                    conf=cfg.conf,
-                    device=self.device,
-                    verbose=False,
-                )
-            result = results[0]
+            # 推理
+            result, annotated_frame = self._predict(frame)
 
-            annotated_frame = result.plot()
-
-            # 交通灯检测与裁剪分类（COCO 类别 9: traffic light）
-            try:
-                h_img, w_img = frame.shape[:2]
-                for bi, box in enumerate(getattr(result, 'boxes', [])):
-                    try:
-                        cls_id = int(box.cls.item())
-                    except Exception:
-                        continue
-                    if cls_id != 9:
-                        continue
-                    # 坐标与边界裁剪
-                    try:
-                        x1, y1, x2, y2 = box.xyxy[0].tolist()
-                    except Exception:
-                        continue
-                    x1i = max(0, min(w_img - 1, int(x1)))
-                    y1i = max(0, min(h_img - 1, int(y1)))
-                    x2i = max(0, min(w_img, int(x2)))
-                    y2i = max(0, min(h_img, int(y2)))
-                    if x2i <= x1i or y2i <= y1i:
-                        continue
-                    roi = frame[y1i:y2i, x1i:x2i]
-                    if roi.size == 0 or roi.shape[0] < 8 or roi.shape[1] < 8:
-                        continue
-                    # 颜色判别
-                    tl_state = detect_traffic_light_color(roi)
-                    # 中文标签与颜色
-                    state_cn = {
-                        'red': '红灯',
-                        'yellow': '黄灯',
-                        'green': '绿灯',
-                        'unknown': '未知',
-                    }.get(tl_state, '未知')
-                    color_map = {
-                        'red': (0, 0, 255),
-                        'yellow': (0, 255, 255),
-                        'green': (0, 255, 0),
-                        'unknown': (255, 255, 255),
-                    }
-                    cv2.putText(
-                        annotated_frame,
-                        state_cn,
-                        (x1i, max(10, y1i - 6)),
-                        cv2.FONT_HERSHEY_SIMPLEX,
-                        0.7,
-                        color_map.get(tl_state, (255, 255, 255)),
-                        2,
-                        lineType=cv2.LINE_AA,
-                    )
-                    # 保存裁剪图
-                    try:
-                        tl_dir = os.path.join(cfg.save_dir, 'traffic_lights')
-                        os.makedirs(tl_dir, exist_ok=True)
-                        timestamp = datetime.now().strftime(cfg.timestamp_fmt)
-                        crop_name = f"tl_{frame_id}_{bi}_{timestamp}_{tl_state}.jpg"
-                        cv2.imwrite(os.path.join(tl_dir, crop_name), roi)
-                    except Exception:
-                        pass
-            except Exception:
-                # 分类或裁剪过程中出错不影响主流程
-                pass
+            # 交通灯检测与裁剪分类（COCO 类别 9）
+            self._annotate_traffic_lights(frame, result, annotated_frame, frame_id)
 
             # FPS 显示
-            if cfg.show_fps:
-                now = datetime.now()
-                dt = (now - last_time).total_seconds()
-                last_time = now
-                if dt > 0:
-                    fps = 0.9 * fps + 0.1 * (1.0 / dt) if fps > 0 else 1.0 / dt
-                cv2.putText(annotated_frame, f"FPS: {fps:.2f}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            self._update_and_draw_fps(annotated_frame)
 
             cv2.imshow(cfg.window_name, annotated_frame)
 
-            timestamp = datetime.now().strftime(cfg.timestamp_fmt)
-            base_name = f'frame_{frame_id}_{timestamp}'
-            img_path = os.path.join(cfg.save_dir, base_name + '.jpg')
-            cv2.imwrite(img_path, annotated_frame)
-
-            if cfg.save_txt:
-                txt_path = os.path.join(cfg.save_dir, base_name + '.txt')
-                h, w = result.orig_shape
-                with open(txt_path, 'w', encoding='utf-8') as f:
-                    for box in result.boxes:
-                        cls_id = int(box.cls.item())
-                        x1, y1, x2, y2 = box.xyxy[0].tolist()
-                        x_c = (x1 + x2) / 2 / w
-                        y_c = (y1 + y2) / 2 / h
-                        bw = (x2 - x1) / w
-                        bh = (y2 - y1) / h
-                        f.write(f"{cls_id} {x_c:.6f} {y_c:.6f} {bw:.6f} {bh:.6f}\n")
+            # 保存结果
+            self._save_result(frame_id, annotated_frame, result)
 
             frame_id += 1
 
@@ -311,11 +332,69 @@ class YOLODetector:
         cv2.destroyAllWindows()
 
 
+def _format_boxes_yolo(result) -> list[str]:
+    """将检测框转换为 YOLO txt 每行字符串。"""
+    lines: list[str] = []
+    h, w = result.orig_shape
+    for box in result.boxes:
+        cls_id = int(box.cls.item())
+        x1, y1, x2, y2 = box.xyxy[0].tolist()
+        x_c = (x1 + x2) / 2 / w
+        y_c = (y1 + y2) / 2 / h
+        bw = (x2 - x1) / w
+        bh = (y2 - y1) / h
+        lines.append(f"{cls_id} {x_c:.6f} {y_c:.6f} {bw:.6f} {bh:.6f}\n")
+    return lines
+
+
+@contextmanager
+def _opencv_enum_log_suppressed(*, enable: bool):
+    """在枚举摄像头时临时抑制 OpenCV 低层错误日志。"""
+    if not enable:
+        yield
+        return
+    utils_mod = getattr(cv2, 'utils', None)
+    logging_mod = getattr(utils_mod, 'logging', None) if utils_mod else None
+    set_level = getattr(logging_mod, 'setLogLevel', None) if logging_mod else None
+    get_level = getattr(logging_mod, 'getLogLevel', None) if logging_mod else None
+    silent_const = getattr(logging_mod, 'LOG_LEVEL_SILENT', None)
+    restore_level = None
+    try:
+        if callable(set_level) and silent_const is not None:
+            try:
+                if callable(get_level):
+                    restore_level = get_level()
+            except (cv2.error, RuntimeError) as err:
+                print(f"[警告] 读取 OpenCV 日志等级失败: {err}")
+                restore_level = None
+            try:
+                set_level(silent_const)
+            except (cv2.error, RuntimeError) as err:
+                print(f"[警告] 设置 OpenCV 日志等级失败: {err}")
+        yield
+    finally:
+        if callable(set_level) and restore_level is not None:
+            try:
+                set_level(restore_level)
+            except (cv2.error, RuntimeError) as err:
+                print(f"[警告] 恢复 OpenCV 日志等级失败: {err}")
+
+
+def _camera_is_usable(idx: int) -> bool:
+    cap = cv2.VideoCapture(idx)
+    try:
+        if not cap.isOpened():
+            return False
+        ret, _ = cap.read()
+        return bool(ret)
+    finally:
+        cap.release()
+
+
 def enumerate_cameras(max_index: int = 8) -> list[int]:
     """探测可用摄像头索引。
     通过尝试 0..max_index-1 打开并读取一帧判断是否可用。
 
-    改进:
       1. 可通过环境变量 YV_SUPPRESS_ENUM_ERRORS(=1) 临时抑制 OpenCV 低层枚举错误日志，减少
          obsensor / MSMF 等后端的噪声 (不会影响后续真正运行时的日志等级)。
       2. 遵循 YV_CAM_FAIL_LIMIT 连续失败上限，发现至少 1 个可用摄像头后若连续失败达到上限提前停止。
@@ -327,57 +406,28 @@ def enumerate_cameras(max_index: int = 8) -> list[int]:
     except ValueError:
         fail_limit = 3
 
-    suppress = os.getenv(f"{ENV_PREFIX}SUPPRESS_ENUM_ERRORS", '1').lower() not in ('0', 'false', '')
-    restore_level = None
-    set_level = None
-    try:
-        if suppress:
-            utils_mod = getattr(cv2, 'utils', None)
-            logging_mod = getattr(utils_mod, 'logging', None) if utils_mod else None
-            set_level = getattr(logging_mod, 'setLogLevel', None) if logging_mod else None
-            get_level = getattr(logging_mod, 'getLogLevel', None) if logging_mod else None
-            silent_const = getattr(logging_mod, 'LOG_LEVEL_SILENT', None)
-            if callable(set_level) and silent_const is not None:
-                try:
-                    if callable(get_level):
-                        restore_level = get_level()
-                except Exception:
-                    restore_level = None
-                set_level(silent_const)
+    suppress = os.getenv(f"{ENV_PREFIX}SUPPRESS_ENUM_ERRORS", '1').lower() not in {'0', 'false', ''}
+    with _opencv_enum_log_suppressed(enable=suppress):
         for i in range(max_index):
-            cap = cv2.VideoCapture(i)
-            if not cap.isOpened():
-                cap.release()
-                consecutive_fail += 1
-                if available and consecutive_fail >= fail_limit:
-                    break
-                continue
-            ret, _ = cap.read()
-            if ret:
+            if _camera_is_usable(i):
                 available.append(i)
                 consecutive_fail = 0
             else:
                 consecutive_fail += 1
-            cap.release()
-            if available and consecutive_fail >= fail_limit:
-                break
-    finally:
-        if suppress and callable(set_level) and restore_level is not None:
-            try:
-                set_level(restore_level)
-            except Exception:
-                pass
+                if available and consecutive_fail >= fail_limit:
+                    break
     return available
 
 
 def interactive_select_camera(max_index: int) -> int:
     cams = enumerate_cameras(max_index)
     if not cams:
-        raise RuntimeError("未检测到任何可用摄像头。")
+        msg = "未检测到任何可用摄像头。"
+        raise RuntimeError(msg)
     print("可用摄像头: " + ", ".join(str(c) for c in cams))
     while True:
         sel = input("请输入要使用的摄像头索引(回车默认0): ").strip()
-        if sel == "":
+        if not sel:
             sel = "0"
         if sel.isdigit():
             idx = int(sel)
@@ -387,23 +437,18 @@ def interactive_select_camera(max_index: int) -> int:
         print("输入无效，请重新输入。")
 
 
-def main(argv: Optional[list[str]] = None):
+def main(argv: list[str] | None = None):
     """供外部脚本调用的主入口，不再在本文件内自动执行。"""
     cfg = load_config_from_args(argv)
     # 交互式摄像头选择
     if cfg.select_camera:
         try:
             cfg.source = interactive_select_camera(cfg.max_cam_index)
-        except Exception as e:
-            print(f"[错误] 摄像头选择失败: {e}")
+        except RuntimeError as err:
+            print(f"[错误] 摄像头选择失败: {err}")
             return
     print("[配置] 使用参数: ")
     for k, v in cfg.to_dict().items():
         print(f"  {k}: {v}")
     detector = YOLODetector(cfg)
     detector.detect_and_save()
-
-
-
-
-
