@@ -12,6 +12,9 @@ dependencies = [
     "torchvision==0.20.1+cu121",
     "pywin32>=311",
     "pyttsx3>=2.90",
+    "vosk>=0.3.45",
+    "sounddevice>=0.5.2",
+    "pygrabber>=0.2",
 ]
 
 [[tool.uv.index]]

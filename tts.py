@@ -13,20 +13,111 @@
 
 from __future__ import annotations
 
+import contextlib
+import logging
+import os
 import threading
+import time as _time
 from collections.abc import Iterable
-from functools import lru_cache
 from typing import Any, cast
 
 import pyttsx3
 
+# Scoped logger to align with app logs
+_log = logging.getLogger("YVA.TTS")
+
 _lock = threading.RLock()
+_DUP_WINDOW = 2.5  # seconds: window to consider texts as duplicates
+ZW_CHARS = {"\u200b", "\u200c", "\u200d", "\u200e", "\u200f"}
+
+# 可选“隔离模式”：每次播报都新建并销毁引擎，等效于用户的 safe_speak。
+# 默认开启（更稳），如需关闭可设置 YV_TTS_ISOLATED=0/false。
+_iso_env = os.getenv("YV_TTS_ISOLATED")
+_ISOLATED = True if _iso_env is None else _iso_env.strip().lower() in {"1", "true", "on", "yes"}
 
 
-@lru_cache(maxsize=1)
+class _DedupState:
+    __slots__ = ("last_text_norm", "last_time", "rate_toggle")
+
+    def __init__(self) -> None:
+        self.last_text_norm: str | None = None
+        self.last_time: float = 0.0
+        self.rate_toggle: int = 0  # 0 -> +1, 1 -> -1
+
+
+_DEDUP = _DedupState()
+
+# 每线程持有独立的 pyttsx3 引擎，避免跨线程复用 SAPI5 导致后续静音
+_TL = threading.local()
+
+# 保留占位（不再使用队列/单例线程策略，避免跨线程复用引擎引发静音）
+_ASYNC_TH: threading.Thread | None = None
+
+
+def _normalize_text_for_dedup(text: str) -> str:
+    # 去掉常见零宽字符，尽量贴近引擎实际发声文本
+    if not text:
+        return ""
+    out: list[str] = []
+    for ch in text:
+        if ch in ZW_CHARS:
+            continue
+        out.append(ch)
+    return "".join(out).strip()
+
+
+def _apply_rate_jitter(engine: pyttsx3.Engine, text: str, explicit_rate: int | None) -> None:
+    """在重复文本短时间内触发时，轻微抖动语速，避免底层去重。"""
+    if explicit_rate is not None:
+        # 调用方已指定语速，不做抖动
+        engine.setProperty("rate", int(explicit_rate))
+        return
+    # 未指定语速时，根据重复情况轻微抖动
+    now = _time.time()
+    norm = _normalize_text_for_dedup(text)
+    last = _DEDUP.last_time
+    last_norm = _DEDUP.last_text_norm
+    try:
+        base_rate_obj = engine.getProperty("rate")
+        if isinstance(base_rate_obj, int):
+            base_rate = base_rate_obj
+        else:
+            try:
+                base_rate = int(base_rate_obj)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                base_rate = 175
+    except AttributeError:
+        base_rate = 175  # 兜底默认
+    if last_norm == norm and (now - last) < _DUP_WINDOW:
+        delta = 1 if _DEDUP.rate_toggle == 0 else -1
+        engine.setProperty("rate", max(50, base_rate + delta))
+        _DEDUP.rate_toggle ^= 1
+    # 更新状态
+    _DEDUP.last_text_norm = norm
+    _DEDUP.last_time = now
+
+
 def _get_engine() -> pyttsx3.Engine:
-    """获取（并缓存）全局 TTS 引擎实例。"""
-    return pyttsx3.init()  # Windows 下默认使用 SAPI5
+    """获取当前线程专属的 TTS 引擎实例；若无则在本线程创建。"""
+    eng = getattr(_TL, "engine", None)
+    if eng is None:
+        eng = pyttsx3.init()  # Windows 下默认使用 SAPI5
+        _TL.engine = eng  # type: ignore[attr-defined]
+        _log.debug("created thread-local TTS engine in thread %s", threading.current_thread().name)
+    return eng
+
+
+def _reset_engine_for_current_thread() -> None:
+    """丢弃当前线程的引擎实例，供异常后重建。"""
+    try:
+        eng = getattr(_TL, "engine", None)
+        if eng is not None:
+            with contextlib.suppress(Exception):
+                eng.stop()
+        if hasattr(_TL, "engine"):
+            delattr(_TL, "engine")
+    except Exception:
+        logging.exception("reset engine for current thread failed")
 
 
 def list_voices() -> list[dict[str, Any]]:
@@ -89,6 +180,41 @@ def _pick_zh_voice_id() -> str | None:
     return None
 
 
+def _speak_once(
+    text: str,
+    *,
+    rate: int | None,
+    volume: float | None,
+    voice: str | None,
+) -> None:
+    """单次播报：每次新建引擎 -> 设置参数 -> runAndWait -> stop。
+
+    仅供后台线程使用，避免主线程直接驱动引擎。
+    """
+    if not text:
+        return
+    with _lock:
+        eng = pyttsx3.init()
+        # 先尝试清理可能残留的队列，避免后续调用被静默吞掉
+        with contextlib.suppress(Exception):
+            eng.stop()
+        # 设置属性与发声
+        if voice is None:
+            zh_id = _pick_zh_voice_id()
+            if zh_id:
+                eng.setProperty("voice", zh_id)
+        else:
+            eng.setProperty("voice", voice)
+        _apply_rate_jitter(eng, text, rate)
+        if volume is not None:
+            v = max(0.0, min(1.0, float(volume)))
+            eng.setProperty("volume", v)
+        eng.say(text)
+        eng.runAndWait()
+        with contextlib.suppress(Exception):
+            eng.stop()
+
+
 def speak(
     text: str,
     *,
@@ -96,31 +222,12 @@ def speak(
     volume: float | None = None,
     voice: str | None = None,
 ) -> None:
-    """朗读文本（阻塞直至朗读完成）。
+    """朗读文本（阻塞直至朗读完成）。内部通过新线程调用，避免主线程直接驱动引擎。"""
+    t = speak_async(text, rate=rate, volume=volume, voice=voice)
+    t.join()
 
-    参数：
-    - text: 要朗读的文本。
-    - rate: 语速（整数，约 100~200，默认使用系统值）。
-    - volume: 音量（0.0~1.0）。
-    - voice: 指定语音 id（使用 list_voices 获取）；若未指定，将优先选择中文语音。
-    """
-    if not text:
-        return
-    eng = _get_engine()
-    with _lock:
-        if voice is None:
-            zh_id = _pick_zh_voice_id()
-            if zh_id:
-                eng.setProperty("voice", zh_id)
-        else:
-            eng.setProperty("voice", voice)
-        if rate is not None:
-            eng.setProperty("rate", int(rate))
-        if volume is not None:
-            v = max(0.0, min(1.0, float(volume)))
-            eng.setProperty("volume", v)
-        eng.say(text)
-        eng.runAndWait()
+
+# 旧的队列式异步策略已移除
 
 
 def speak_async(
@@ -130,10 +237,13 @@ def speak_async(
     volume: float | None = None,
     voice: str | None = None,
 ) -> threading.Thread:
-    """在后台线程朗读文本；返回线程句柄。"""
+    """在新线程中调用 speak（每次独立引擎/线程，最稳妥）。"""
 
     def _runner() -> None:
-        speak(text, rate=rate, volume=volume, voice=voice)
+        try:
+            _speak_once(text, rate=rate, volume=volume, voice=voice)
+        except Exception:
+            logging.exception("speak_async failed")
 
     t = threading.Thread(target=_runner, daemon=True)
     t.start()
@@ -141,14 +251,16 @@ def speak_async(
 
 
 if __name__ == "__main__":
-    import sys
+    # 简单自测：隔离模式默认开启，可持续发声
+    def _safe_speak(text: str) -> None:
+        engine = pyttsx3.init()
+        engine.say(text)
+        engine.runAndWait()
+        engine.stop()
 
-    txt = " ".join(sys.argv[1:]).strip()
-    if not txt:
-        try:
-            txt = input("请输入要朗读的文字：").strip()
-        except EOFError:
-            txt = ""
-    if not txt:
-        txt = "你好，我是本地语音助手。"
-    speak(txt)
+    _safe_speak('第一次测试')
+    print("1")
+    _safe_speak('第二次测试')
+    print("2")
+    _safe_speak('第三次测试')
+    print("3")

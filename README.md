@@ -25,6 +25,9 @@ YoloVisualAids 是一个基于 Ultralytics YOLOv11 的实时目标检测工具�
 - 摄像头枚举与降噪
   - 枚举 `0..N-1` 摄像头，发现可用后遇到连续失败可提前结束
   - 可在“枚举阶段”抑制 OpenCV 低层错误日志
+\n+- 语音关键词识别（离线，可选）
+  - 使用 Vosk 本地 ASR + 受限语法，仅识别指定关键词（更稳）
+  - 独立模块 `keyword_listener.py`，便于在你的业务中回调触发
 
 
 ## 目录结构（节选）
@@ -75,6 +78,12 @@ uv run python -V
 
 ```powershell
 python -m pip install -U ultralytics PySide6 pywin32
+```
+
+可选：语音关键词识别所需依赖
+
+```powershell
+uv sync  # 已包含 vosk 与 sounddevice 依赖
 ```
 
 
@@ -144,6 +153,39 @@ uv run python run_traffic.py --image .\traffic_img\demo.jpg --auto --model yolo1
 - 自动模式的裁剪保存于 `results/traffic_lights/` 或 `--save-crops` 指定目录。
 
 
+### 4) 语音关键词识别（离线）
+
+用于只识别一小组“命令词”，离线、稳定、低资源：
+
+1) 下载并解压 Vosk 中文模型（示例：vosk-model-small-cn-0.22）：
+   - https://alphacephei.com/vosk/models
+2) 运行监听器（麦克风权限需开启）：
+
+```powershell
+uv run python keyword_listener.py --model "D:\\models\\vosk-model-small-cn-0.22" --keywords 开始 停止 退出
+```
+
+集成到你的代码：
+
+```python
+from keyword_listener import KeywordListener
+
+kl = KeywordListener(
+  model_path="D:\\models\\vosk-model-small-cn-0.22",
+  keywords=["开始", "停止", "保存图片", "退出"],
+)
+
+def on_hit(text: str) -> None:
+  print("命中关键词:", text)
+  # TODO: 在这里触发你的业务逻辑，例如：开始/停止检测、保存当前帧等
+
+kl.start(on_keyword=on_hit)
+# ...你的主循环...
+# 退出前：
+kl.stop()
+```
+
+
 ## 参数与环境变量
 
 所有参数既可由命令行传入，也可使用环境变量覆盖默认值（前缀 `YV_`）：
@@ -209,6 +251,9 @@ uv run python YOLO_detection.py --save-txt
 
 5) 交通灯未检测到或颜色不稳定？
 - 调整 `--conf` 与 `--img-size`，或使用手动 ROI；环境光很暗/很亮时可适当调整位置与尺寸。
+
+6) 语音关键词识别没反应或报设备错误？
+- 确认已安装依赖并下载模型；在“系统-隐私-麦克风”里允许应用访问；必要时在命令行指定设备索引 `--device`。
 
 
 ## 致谢

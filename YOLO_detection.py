@@ -10,7 +10,9 @@ import cv2
 import torch
 from ultralytics import YOLO
 
+from announce import Announcer
 from color_detction import detect_traffic_light_color
+from traffic_logic import decide_traffic_status
 from visual_styles import TL_COLOR_MAP, TL_STATE_CN
 
 #############################################
@@ -32,7 +34,7 @@ LABEL_Y_OFFSET = 6
 TEXT_MARGIN_MIN = 10
 MAX_INDEX_DIGITS = 6
 
-# 展示层样式从 visual_styles 引入（保持算法模块纯粹）
+# 展示层样式从 visual_styles 引入
 
 
 def _env(name: str, default: Any) -> Any:
@@ -80,7 +82,7 @@ class YOLOConfig:
     # 推理参数
     conf: float = field(default_factory=lambda: float(_env("CONF", 0.5)))
     # 输入尺寸；为空(None) 时表示使用原始帧尺寸而不是模型的默认缩放尺寸
-    img_size: list[int] | None = field(default_factory=lambda: _as_optional_int_list(_env("IMG_SIZE", "")))  # 例如: "640" 或 "640,640"
+    img_size: list[int] | None = field(default_factory=lambda: _as_optional_int_list(_env("IMG_SIZE", "")))
 
     # 界面与输出细节
     window_name: str = field(default_factory=lambda: _env("WINDOW_NAME", "YOLOv11 Detection"))
@@ -93,6 +95,13 @@ class YOLOConfig:
     quiet_cv: bool = field(default_factory=lambda: _as_bool(_env("QUIET_CV", default=True)))
     # 枚举摄像头连续失败上限（用于提前终止枚举）
     cam_fail_limit: int = field(default_factory=lambda: int(_env("CAM_FAIL_LIMIT", 3)))
+
+    # 播报/节流/黄闪参数
+    ann_min_interval: float = field(default_factory=lambda: float(_env("ANN_MIN_INTERVAL", 1.5)))
+    ann_flash_window: float = field(default_factory=lambda: float(_env("ANN_FLASH_WINDOW", 3.0)))
+    ann_flash_min_events: int = field(default_factory=lambda: int(_env("ANN_FLASH_MIN_EVENTS", 6)))
+    ann_flash_yellow_ratio: float = field(default_factory=lambda: float(_env("ANN_FLASH_YELLOW_RATIO", 0.9)))
+    ann_flash_cooldown: float = field(default_factory=lambda: float(_env("ANN_FLASH_COOLDOWN", 5.0)))
 
     def to_dict(self):  # 便于调试打印
         return asdict(self)
@@ -123,6 +132,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-fps", dest="show_fps", action="store_false", help="关闭 FPS 显示")
     parser.add_argument("--quiet-cv", dest="quiet_cv", action="store_true", help="抑制 OpenCV 摄像头错误日志")
     parser.add_argument("--cam-fail-limit", dest="cam_fail_limit", type=int, help="摄像头枚举连续失败上限 (默认 3)")
+    # 播报/节流/黄闪参数
+    parser.add_argument("--ann-min-interval", dest="ann_min_interval", type=float, help="同句最小播报间隔(秒)")
+    parser.add_argument("--ann-flash-window", dest="ann_flash_window", type=float, help="黄闪判定时间窗口(秒)")
+    parser.add_argument("--ann-flash-min-events", dest="ann_flash_min_events", type=int, help="黄闪判定最少采样数")
+    parser.add_argument("--ann-flash-yellow-ratio", dest="ann_flash_yellow_ratio", type=float, help="黄灯占比阈值(0~1)")
+    parser.add_argument("--ann-flash-cooldown", dest="ann_flash_cooldown", type=float, help="黄闪播报冷却时间(秒)")
     return parser
 
 
@@ -136,7 +151,8 @@ def load_config_from_args(argv: list[str] | None = None) -> YOLOConfig:
         "model_path", "device", "source", "save_dir", "save_txt",
         "select_camera", "max_cam_index",
         "conf", "img_size", "window_name", "timestamp_fmt", "exit_key", "show_fps",
-        "quiet_cv", "cam_fail_limit"
+        "quiet_cv", "cam_fail_limit",
+        "ann_min_interval", "ann_flash_window", "ann_flash_min_events", "ann_flash_yellow_ratio", "ann_flash_cooldown",
     ]:
         val = getattr(args, field_name, None)
         if val is not None:
@@ -168,9 +184,55 @@ class YOLODetector:
         # FPS 相关状态
         self._last_time = datetime.now(UTC)
         self._fps = 0.0
+        # TTS 播报器（可配置：去重/限流/黄闪参数）
+        self._ann = Announcer(
+            min_interval_sec=self.cfg.ann_min_interval,
+            flash_window_sec=self.cfg.ann_flash_window,
+            flash_min_events=self.cfg.ann_flash_min_events,
+            flash_yellow_ratio=self.cfg.ann_flash_yellow_ratio,
+            flash_cooldown_sec=self.cfg.ann_flash_cooldown,
+        )
+
+    @staticmethod
+    def _should_stop(stop_event: Any | None) -> bool:
+        return bool(stop_event is not None and getattr(stop_event, 'is_set', lambda: False)())
+
+    def _inc_read_fail_and_should_break(self) -> bool:
+        fail = getattr(self, '_read_fail_count', 0) + 1
+        self._read_fail_count = fail
+        if fail >= READ_FAIL_LIMIT:
+            print(f"[错误] 连续 {fail} 次无法读取帧，结束检测。")
+            return True
+        return False
+
+    def _reset_read_fail(self) -> None:
+        if hasattr(self, '_read_fail_count'):
+            self._read_fail_count = 0
+
+    def _say_non_tl_counts(self, result) -> None:
+        counts: dict[int, int] = {}
+        for b in getattr(result, 'boxes', []):
+            try:
+                cid = int(b.cls.item())
+            except (AttributeError, ValueError, TypeError):
+                continue
+            if cid == TRAFFIC_LIGHT_CLASS_ID:
+                continue
+            counts[cid] = counts.get(cid, 0) + 1
+        if counts:
+            self._ann.say_non_tl(counts)
+
+    def _process_frame(self, frame, frame_id: int):
+        result, annotated_frame = self._predict(frame)
+        self._annotate_traffic_lights(frame, result, annotated_frame, frame_id)
+        self._say_non_tl_counts(result)
+        self._update_and_draw_fps(annotated_frame)
+        cv2.imshow(self.cfg.window_name, annotated_frame)
+        self._save_result(frame_id, annotated_frame, result)
+        return annotated_frame
 
     def _quiet_opencv_logs(self) -> None:
-        """按需抑制 OpenCV 日志（兼容不同版本）。"""
+        """按需抑制 OpenCV 日志"""
         if not self.cfg.quiet_cv:
             return
         # 尽量避免 try-except-pass，使用最小范围的 suppress
@@ -211,6 +273,7 @@ class YOLODetector:
     def _annotate_traffic_lights(self, frame, result, annotated_frame, frame_id: int) -> None:
         """检测交通灯并标注、裁剪保存。"""
         h_img, w_img = frame.shape[:2]
+        tl_boxes: list[tuple[int, int, int, int, float]] = []
         for bi, box in enumerate(getattr(result, 'boxes', [])):
             # 提取类别
             try:
@@ -235,6 +298,12 @@ class YOLODetector:
             )
             if bound[2] <= bound[0] or bound[3] <= bound[1]:
                 continue
+            # 收集供决策的框（包含置信度）
+            try:
+                conf_val = float(box.conf.item()) if hasattr(box, 'conf') else 0.0
+            except (AttributeError, ValueError, TypeError):
+                conf_val = 0.0
+            tl_boxes.append((bound[0], bound[1], bound[2], bound[3], conf_val))
             roi = frame[bound[1]:bound[3], bound[0]:bound[2]]
             if roi.size == 0 or roi.shape[0] < MIN_ROI_SIDE or roi.shape[1] < MIN_ROI_SIDE:
                 continue
@@ -252,6 +321,11 @@ class YOLODetector:
             )
             # 保存裁剪
             self._save_tl_crop(roi, frame_id, bi, tl_state)
+        # 若本帧存在交通灯，按共享逻辑给出单一状态并播报
+        if tl_boxes:
+            status = decide_traffic_status(frame, tl_boxes)
+            # 使用交通灯专用播报（支持颜色变化即时播报与黄灯闪烁识别）
+            self._ann.say_traffic(status)
 
     def _save_tl_crop(self, roi, frame_id: int, bi: int, tl_state: str) -> None:
         tl_dir = Path(self.cfg.save_dir) / 'traffic_lights'
@@ -287,7 +361,11 @@ class YOLODetector:
         Path(cfg.save_dir).mkdir(parents=True, exist_ok=True)
         # 可选抑制 OpenCV 日志（仅在本进程）
         self._quiet_opencv_logs()
-        cap = cv2.VideoCapture(cfg.source)
+        # 在 Windows 上，若 source 为整数索引，优先使用 DirectShow 后端以与枚举顺序一致
+        if isinstance(cfg.source, int) and os.name == 'nt':
+            cap = cv2.VideoCapture(cfg.source, cv2.CAP_DSHOW)
+        else:
+            cap = cv2.VideoCapture(cfg.source)
         if not cap.isOpened():
             msg = f"无法打开视频源： {cfg.source}"
             raise RuntimeError(msg)
@@ -295,33 +373,17 @@ class YOLODetector:
         frame_id = 0
 
         while True:
-            if stop_event is not None and getattr(stop_event, 'is_set', lambda: False)():
+            if self._should_stop(stop_event):
                 break
             ret, frame = cap.read()
             if not ret:
-                # 连续读取失败处理：允许短暂失败（如摄像头热插拔）
-                fail = getattr(self, '_read_fail_count', 0) + 1
-                self._read_fail_count = fail
-                if fail >= READ_FAIL_LIMIT:
-                    print(f"[错误] 连续 {fail} 次无法读取帧，结束检测。")
+                if self._inc_read_fail_and_should_break():
                     break
                 continue
-            if hasattr(self, '_read_fail_count'):
-                self._read_fail_count = 0
+            self._reset_read_fail()
 
-            # 推理
-            result, annotated_frame = self._predict(frame)
-
-            # 交通灯检测与裁剪分类（COCO 类别 9）
-            self._annotate_traffic_lights(frame, result, annotated_frame, frame_id)
-
-            # FPS 显示
-            self._update_and_draw_fps(annotated_frame)
-
-            cv2.imshow(cfg.window_name, annotated_frame)
-
-            # 保存结果
-            self._save_result(frame_id, annotated_frame, result)
+            # 单帧处理
+            self._process_frame(frame, frame_id)
 
             frame_id += 1
 

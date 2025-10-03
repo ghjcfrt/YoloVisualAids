@@ -77,6 +77,21 @@ class YOLOAutoDetector:
         # 最近一次检测状态："init" | "none" | "no_vertical" | "ok"
         self.last_state: str = "init"
 
+    def _predict_and_collect(self, frame) -> list[tuple[int, int, int, int, float]]:
+        """执行一次预测并收集候选框（不区分朝向）。"""
+        if frame is None or not isinstance(frame, np.ndarray):
+            msg = "frame 必须是 numpy 图像"
+            raise TypeError(msg)
+
+        imgsz = self.opts.img_size
+        if imgsz is None:
+            h, w = frame.shape[:2]
+            imgsz = [h, w]
+
+        res = self.model.predict(frame, imgsz=imgsz, conf=self.opts.conf, device=self.device, verbose=False)
+        r = res[0]
+        return self._collect_candidate_boxes(r, frame.shape)
+
     def _collect_candidate_boxes(self, r, frame_shape: tuple[int, ...]) -> list[tuple[int, int, int, int, float]]:
         """从 YOLO 结果中提取候选框，仅保留指定类别并进行边界/尺寸约束。"""
         h_img, w_img = frame_shape[:2]
@@ -128,19 +143,7 @@ class YOLOAutoDetector:
         - 多个竖向时，选距离图像中心最近的一个（次序再参考置信度）。
         - 无竖向则返回空列表。
         """
-        if frame is None or not isinstance(frame, np.ndarray):
-            msg = "frame 必须是 numpy 图像"
-            raise TypeError(msg)
-
-        imgsz = self.opts.img_size
-        if imgsz is None:
-            h, w = frame.shape[:2]
-            imgsz = [h, w]
-
-        res = self.model.predict(frame, imgsz=imgsz, conf=self.opts.conf, device=self.device, verbose=False)
-        r = res[0]
-
-        boxes = self._collect_candidate_boxes(r, frame.shape)
+        boxes = self._predict_and_collect(frame)
         if not boxes:
             self.last_state = "none"
             return []
@@ -160,3 +163,20 @@ class YOLOAutoDetector:
         )
         self.last_state = "ok"
         return [best_box]
+
+    def detect_orientations(self, frame) -> tuple[list[tuple[int, int, int, int, float]], list[tuple[int, int, int, int, float]]]:
+        """一次推理同时返回(竖向列表, 横向列表)。
+
+        last_state 设置规则：
+        - 无任何框 -> "none"
+        - 仅有横向 -> "no_vertical"
+        - 存在竖向 -> "ok"
+        """
+        boxes = self._predict_and_collect(frame)
+        if not boxes:
+            self.last_state = "none"
+            return [], []
+        vertical = [b for b in boxes if self._is_vertical(b)]
+        horizontal = [b for b in boxes if not self._is_vertical(b)]
+        self.last_state = "ok" if vertical else "no_vertical"
+        return vertical, horizontal
