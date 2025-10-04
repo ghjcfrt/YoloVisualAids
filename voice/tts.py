@@ -1,4 +1,11 @@
-"""本地离线 TTS 工具（Windows 首选 SAPI5），基于 pyttsx3"""
+"""本地离线 TTS 工具（Windows 首选 SAPI5），基于 pyttsx3
+
+特性：
+- 自动尝试中文语音（按名称/语言/ID 关键词匹配）
+- 文本去零宽字符与短时间重复语句“音速轻微抖动”防重复感
+- 同步 speak（阻塞）与 speak_async（后台线程）两种调用方式
+- 可通过环境变量 YV_TTS_ISOLATED 控制是否“隔离实例”（每次 speak 使用新 engine）
+"""
 
 from __future__ import annotations
 
@@ -77,7 +84,7 @@ def _get_engine() -> pyttsx3.Engine:
     if eng is None:
         eng = pyttsx3.init()
         _TL.engine = eng
-        _log.debug("created thread-local TTS engine in thread %s", threading.current_thread().name)
+    _log.debug("已在线程 %s 创建线程本地 TTS 引擎", threading.current_thread().name)
     return eng
 
 
@@ -90,10 +97,11 @@ def _reset_engine_for_current_thread() -> None:
         if hasattr(_TL, "engine"):
             delattr(_TL, "engine")
     except Exception:
-        logging.exception("reset engine for current thread failed")
+        logging.exception("重置当前线程的 TTS 引擎失败")
 
 
 def list_voices() -> list[dict[str, Any]]:
+    """列出系统可用的语音包信息（id/name/languages/gender/age）。"""
     eng = _get_engine()
     items: list[dict[str, Any]] = []
     voices_obj: object = eng.getProperty("voices")
@@ -127,6 +135,7 @@ def list_voices() -> list[dict[str, Any]]:
 
 
 def _pick_zh_voice_id() -> str | None:
+    """尽力选择中文语音的 ID（按常见关键字匹配）。"""
     candidates = list_voices()
     keywords = ("zh", "chinese", "chs", "cn")
     for key in keywords:
@@ -152,6 +161,7 @@ def _speak_once(
     volume: float | None,
     voice: str | None,
 ) -> None:
+    """在当前线程中执行一次性 TTS 输出。"""
     if not text:
         return
     with _lock:
@@ -181,6 +191,7 @@ def speak(
     volume: float | None = None,
     voice: str | None = None,
 ) -> None:
+    """同步朗读：阻塞等待直至播放完成。"""
     t = speak_async(text, rate=rate, volume=volume, voice=voice)
     t.join()
 
@@ -192,11 +203,12 @@ def speak_async(
     volume: float | None = None,
     voice: str | None = None,
 ) -> threading.Thread:
+    """异步朗读：创建后台线程执行播放并立即返回线程对象。"""
     def _runner() -> None:
         try:
             _speak_once(text, rate=rate, volume=volume, voice=voice)
         except Exception:
-            logging.exception("speak_async failed")
+            logging.exception("异步播报失败")
 
     t = threading.Thread(target=_runner, daemon=True)
     t.start()

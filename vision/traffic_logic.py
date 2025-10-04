@@ -1,3 +1,8 @@
+"""交通灯状态判定逻辑
+
+根据检测得到的候选框（含坐标与置信度），并结合 ROI 颜色识别结果，
+在竖直/水平两种信号灯样式之间做分支，输出最终的中文状态文案。
+"""
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
@@ -11,11 +16,13 @@ Box = tuple[int, int, int, int, float]
 
 
 def _is_vertical(b: Box) -> bool:
+    """判定候选框是否竖直（高>宽）。"""
     x1, y1, x2, y2, _ = b
     return (y2 - y1) > (x2 - x1)
 
 
 def _best_by_center(img_shape, boxes: Iterable[Box]) -> Box | None:
+    """从候选中选择离图像中心最近（次关键按置信度倒序）的框。"""
     boxes = list(boxes)
     if not boxes:
         return None
@@ -33,6 +40,7 @@ def _best_by_center(img_shape, boxes: Iterable[Box]) -> Box | None:
 
 
 def _color_of_box(frame, b: Box) -> str:
+    """对框内 ROI 进行颜色判定，返回 red/yellow/green/unknown。"""
     x1, y1, x2, y2, _ = b
     x1, y1 = max(0, x1), max(0, y1)
     x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
@@ -43,6 +51,7 @@ def _color_of_box(frame, b: Box) -> str:
 
 
 def _decide_from_vertical(frame, vertical: list[Box]) -> str | None:
+    """针对竖直灯样式的判定策略。"""
     if not vertical:
         return None
     if len(vertical) > 1:
@@ -59,6 +68,7 @@ def _decide_from_vertical(frame, vertical: list[Box]) -> str | None:
 
 
 def _decide_from_horizontal(frame, horizontal: list[Box]) -> str | None:
+    """针对水平灯样式的判定策略。"""
     if not horizontal:
         return None
     if len(horizontal) > 1:
@@ -74,6 +84,7 @@ def _decide_from_horizontal(frame, horizontal: list[Box]) -> str | None:
 
 
 def decide_traffic_status(frame, boxes: list[Box]) -> str:
+    """根据候选框集合与颜色检测结果生成状态文案。"""
     if not boxes:
         return "无红绿灯"
 

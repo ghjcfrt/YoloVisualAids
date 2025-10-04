@@ -1,4 +1,4 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -15,6 +15,7 @@ ROI = tuple[int, int, int, int]
 
 
 def _color_bgr(name: str) -> tuple[int, int, int]:
+    """将颜色名映射为 BGR 颜色元组（OpenCV 颜色顺序）。"""
     return (0, 200, 255) if name == "yellow" else ((0, 255, 0) if name == "green" else (0, 0, 255))
 
 
@@ -22,18 +23,20 @@ _ANN = Announcer(min_interval_sec=1.5)
 
 
 def draw_and_report(win: str, frame, roi_rect: ROI) -> str:
+    """在图像上绘制 ROI 与颜色文本，并返回判定的颜色字符串。"""
     x, y, w, h = roi_rect
     x, y, w, h = clamp_roi(x, y, w, h, (frame.shape[1], frame.shape[0]))
     roi = frame[y : y + h, x : x + w]
     color = detect_traffic_light_color(roi)
     out = frame.copy()
     cv2.rectangle(out, (x, y), (x + w, y + h), (0, 255, 255), 2)
-    cv2.putText(out, f"color: {color}", (x, max(0, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, _color_bgr(color), 2, cv2.LINE_AA)
+    cv2.putText(out, f"颜色：{color}", (x, max(0, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.8, _color_bgr(color), 2, cv2.LINE_AA)
     cv2.imshow(win, out)
     return color
 
 
 def _save_crop(save_dir: Path, filename: str, roi) -> None:
+    """保存 ROI 小图到指定目录。"""
     try:
         save_dir.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(save_dir / filename), roi)
@@ -42,19 +45,23 @@ def _save_crop(save_dir: Path, filename: str, roi) -> None:
 
 
 def _wait_key(delay: int = 0) -> int:
+    """封装 cv2.waitKey 并屏蔽高位。"""
     return cv2.waitKey(delay) & 0xFF
 
 
 def _put_status(img, text: str) -> None:
+    """在左上角绘制状态文本。"""
     cv2.putText(img, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2, cv2.LINE_AA)
 
 
 def _log_and_say(base_name: str, status: str, *, extra: str = "") -> None:
-    print(f"{base_name}: {status}{extra}")
+    """打印并通过 Announcer 播报状态。"""
+    print(f"{base_name}：{status}{extra}")
     _ANN.say_traffic(status)
 
 
 def _maybe_save_crop(args, *, is_cam: bool, base_name: str, box, img) -> None:
+    """在传入了 --save-crops 时保存裁剪图。"""
     if not getattr(args, "save_crops", ""):
         return
     sd = Path(args.save_crops)
@@ -63,6 +70,7 @@ def _maybe_save_crop(args, *, is_cam: bool, base_name: str, box, img) -> None:
 
 
 def _best_by_center(img, boxes):
+    """按中心距离最小、置信度次关键倒序选择一个候选框。"""
     if not boxes:
         return None
     h_img, w_img = img.shape[:2]
@@ -79,12 +87,14 @@ def _best_by_center(img, boxes):
 
 
 def _box_color(img, b) -> str:
+    """对候选框区域进行颜色检测并返回类别名。"""
     x1, y1, x2, y2, _ = b
     roi = img[y1:y2, x1:x2]
     return detect_traffic_light_color(roi)
 
 
 def _draw_box(out_img, b, label: str, color_name: str | None = None) -> None:
+    """绘制候选框与标签文本。"""
     x1, y1, x2, y2, _ = b
     cv2.rectangle(out_img, (x1, y1), (x2, y2), (0, 255, 255), 2)
     color_disp = _color_bgr(color_name or "yellow")
@@ -92,6 +102,7 @@ def _draw_box(out_img, b, label: str, color_name: str | None = None) -> None:
 
 
 def _horizontal_logic(img, out_img, hori_boxes):
+    """处理水平样式交通灯的判定与绘制。"""
     if not hori_boxes:
         st = "无红绿灯"
         cv2.putText(out_img, st, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2, cv2.LINE_AA)
@@ -133,6 +144,7 @@ class Scene(NamedTuple):
 
 
 def _vertical_logic(scene: Scene, args, *, base_name: str, is_cam: bool):
+    """处理竖直样式交通灯的判定与绘制。"""
     img, out_img, vert_boxes, hori_boxes = scene
     handled = False
     status: str | None = None
@@ -176,6 +188,7 @@ def _auto_draw_and_save(
     *,
     is_cam: bool = False,
 ) -> tuple[Any, str]:
+    """自动检测+绘制并按需保存裁剪图，返回输出图像与状态文本。"""
     vert_boxes, hori_boxes = detector.detect_orientations(img)
     out = img.copy()
     status: str | None = None
@@ -194,6 +207,7 @@ def _auto_draw_and_save(
 
 
 def _handle_image(args, detector: YOLOAutoDetector | None, roi_rect: ROI | None, win: str) -> None:
+    """处理单张图片模式。"""
     p = Path(args.image)
     if not p.is_file():
         raise FileNotFoundError(p)
@@ -212,25 +226,26 @@ def _handle_image(args, detector: YOLOAutoDetector | None, roi_rect: ROI | None,
             cv2.destroyAllWindows()
             return
         color = draw_and_report(win, img, local_roi)
-        print(f"{p}: {color}")
+        print(f"{p}：{color}")
         _wait_key(0)
     cv2.destroyAllWindows()
 
 
 def _handle_dir(args, detector: YOLOAutoDetector | None, roi_rect: ROI | None, win: str) -> None:
+    """处理目录批量图片模式（支持 r 重选 ROI，q/Esc 退出）。"""
     dp = Path(args.dir)
     if not dp.is_dir():
         raise NotADirectoryError(dp)
     images = iter_images_from_dir(str(dp))
     if not images:
-        print("目录中未找到图片。支持: .jpg .jpeg .png .bmp .webp")
+        print("目录中未找到图片 支持：.jpg .jpeg .png .bmp .webp")
         return
     idx = 0
     while idx < len(images):
         p = Path(images[idx])
         img = cv2.imread(str(p))
         if img is None:
-            print(f"读取失败，跳过: {p}")
+            print(f"读取失败 跳过：{p}")
             idx += 1
             continue
         if detector is not None:
@@ -243,7 +258,7 @@ def _handle_dir(args, detector: YOLOAutoDetector | None, roi_rect: ROI | None, w
                 print("未选择 ROI，退出。")
                 break
             color = draw_and_report(win, img, local_roi)
-            print(f"{p.name}: {color}")
+            print(f"{p.name}：{color}")
             k = _wait_key(0)
         if k in {ord('q'), 27}:
             break
@@ -255,6 +270,7 @@ def _handle_dir(args, detector: YOLOAutoDetector | None, roi_rect: ROI | None, w
 
 
 def _handle_cam(args, detector: YOLOAutoDetector | None, roi_rect: ROI | None, win: str) -> None:
+    """处理摄像头实时模式（支持 r 重选 ROI，q/Esc 退出）。"""
     cap = cv2.VideoCapture(int(args.cam))
     if not cap.isOpened():
         msg = f"无法打开摄像头 {args.cam}"
@@ -286,6 +302,7 @@ def _handle_cam(args, detector: YOLOAutoDetector | None, roi_rect: ROI | None, w
 
 
 def run(args) -> None:
+    """交通灯颜色检测主流程入口（解析参数对象并分派对应模式）。"""
     win = getattr(args, 'win', 'traffic-test')
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
     detector: YOLOAutoDetector | None = None

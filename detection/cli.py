@@ -1,4 +1,7 @@
-"""命令行检测入口封装"""
+"""命令行检测入口封装
+
+作为 `python -m detection.cli` 或通过 `main.py detect` 的薄封装。
+"""
 
 from __future__ import annotations
 

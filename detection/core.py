@@ -1,8 +1,6 @@
-"""YOLO 检测核心实现
+"""YOLO 检测核心实现 提供配置解析 设备选择 摄像头枚举 与检测保存等能力"""
 
-"""
-
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import argparse
 import os
@@ -32,7 +30,7 @@ MAX_INDEX_DIGITS = 6
 
 
 def _env(name: str, default: Any) -> Any:
-    """读取环境变量（若存在则覆盖默认值）"""
+    """读取环境变量 若存在则覆盖默认值"""
     return os.getenv(f"{ENV_PREFIX}{name}", default)
 
 
@@ -79,7 +77,7 @@ class YOLOConfig:
     img_size: list[int] | None = field(default_factory=lambda: _as_optional_int_list(_env("IMG_SIZE", "")))
 
     # 界面与输出细节
-    window_name: str = field(default_factory=lambda: _env("WINDOW_NAME", "YOLOv11 Detection"))
+    window_name: str = field(default_factory=lambda: _env("WINDOW_NAME", "YVA"))
     timestamp_fmt: str = field(default_factory=lambda: _env("TIMESTAMP_FMT", "%Y%m%d_%H%M%S"))
     exit_key: str = field(default_factory=lambda: _env("EXIT_KEY", "q"))
 
@@ -252,9 +250,10 @@ class YOLODetector:
                 set_level(level_const)
             except (cv2.error, RuntimeError) as err:  # 记录一次即可
                 print(f"[警告] 设置 OpenCV 日志等级失败: {err}")
+    # 仅在可用时尝试设置为静默，无需显式返回
 
     def _predict(self, frame) -> tuple[Any, Any]:
-        """执行模型推理，返回 (result, annotated_frame)"""
+        """执行模型推理 返回 (result, annotated_frame)"""
         cfg = self.cfg
         if cfg.img_size is not None:
             results = self.model.predict(
@@ -278,7 +277,7 @@ class YOLODetector:
         return result, annotated_frame
 
     def _annotate_traffic_lights(self, frame, result, annotated_frame, frame_id: int) -> None:
-        """检测交通灯并标注、裁剪保存"""
+        """检测交通灯并标注与裁剪保存"""
         h_img, w_img = frame.shape[:2]
         tl_boxes: list[tuple[int, int, int, int, float]] = []
         for bi, box in enumerate(getattr(result, "boxes", [])):
@@ -395,7 +394,7 @@ class YOLODetector:
 
 
 def _format_boxes_yolo(result) -> list[str]:
-    """将检测框转换为 YOLO txt 每行字符串"""
+    """将检测框转换为 YOLO txt 行文本列表"""
     lines: list[str] = []
     h, w = result.orig_shape
     for box in result.boxes:

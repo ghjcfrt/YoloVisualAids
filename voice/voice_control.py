@@ -21,6 +21,7 @@ class VoiceController:
         self._listener = None
 
     def available(self) -> bool:
+        """是否可用 需关键监听实现与模型目录齐备"""
         return (
             KeywordListener is not None
             and KeywordOptions is not None
@@ -28,6 +29,7 @@ class VoiceController:
         )
 
     def start(self, keywords: Iterable[str], on_keyword: Callable[[str], None]) -> None:
+        """启动关键字监听 在后台线程回调命中文本"""
         if not self.available() or KeywordListener is None or KeywordOptions is None:
             return
         opts = KeywordOptions(
@@ -42,6 +44,7 @@ class VoiceController:
         listener.start(on_keyword=on_keyword)
 
     def stop(self) -> None:
+        """停止监听 并清理内部状态"""
         lst = self._listener
         if lst is not None and hasattr(lst, "stop"):
             lst.stop()

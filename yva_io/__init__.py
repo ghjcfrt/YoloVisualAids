@@ -1,3 +1,5 @@
+"""设备与摄像头相关工具门面 导出常用函数与类型"""
+
 from __future__ import annotations
 
 from .camera_name import CameraDeviceInfo, enumerate_cameras

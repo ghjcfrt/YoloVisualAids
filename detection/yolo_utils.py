@@ -1,3 +1,11 @@
+"""轻量 YOLO 封装（供交通灯 ROI 自动裁剪模式使用）
+
+本模块提供：
+- select_device: 自动/显式选择运行设备
+- parse_img_size: 解析逗号分隔的输入尺寸
+- YOLOOpts: 配置数据类
+- YOLOAutoDetector: 仅做检测与候选框过滤的轻量包装
+"""
 from __future__ import annotations
 
 import operator
@@ -19,6 +27,13 @@ MIN_SIDE_PX = 8
 
 
 def select_device(requested: str | None = None) -> str:
+    """选择推理设备。
+
+    参数
+    - requested: 显式传入时优先；为空或 'auto' 时自动探测 cuda/mps/cpu。
+    返回
+    - 'cuda'/'mps'/'cpu' 中之一；当 torch 不可用时回退到 'cpu'。
+    """
     if requested and requested.lower() not in {"", "auto"}:
         return requested
     if torch is not None:
@@ -35,6 +50,11 @@ def select_device(requested: str | None = None) -> str:
 
 
 def parse_img_size(s: str | None) -> list[int] | None:
+    """解析输入尺寸参数。
+
+    支持 "640" 或 "640,640" 等形式；空字符串/None 返回 None。
+    解析失败返回 None（调用方可据此采用默认策略）。
+    """
     s = (s or "").strip()
     if not s:
         return None
@@ -59,6 +79,15 @@ class YOLOOpts:
 
 
 class YOLOAutoDetector:
+    """YOLO 检测简化器
+
+    仅负责执行 detect() / detect_orientations() 并对候选框做基本过滤：
+    - 仅保留给定 class_id 的检测框
+    - 过滤过小（边长 < MIN_SIDE_PX）的框
+    - 先按置信度降序排序
+    - detect: 返回距离图像中心最近（次关键按置信度倒序）的单个竖直框
+    - detect_orientations: 按竖直/水平拆分，分别返回两个列表
+    """
     def __init__(self, opts: YOLOOpts):
         self.opts = opts
         self.device = select_device(opts.device)
@@ -69,6 +98,7 @@ class YOLOAutoDetector:
         self.last_state: str = "init"
 
     def _predict_and_collect(self, frame) -> list[tuple[int, int, int, int, float]]:
+        """运行模型并抽取候选框（统一为整数像素坐标 + 置信度）。"""
         if frame is None or not isinstance(frame, np.ndarray):
             msg = "frame 必须是 numpy 图像"
             raise TypeError(msg)
@@ -83,6 +113,7 @@ class YOLOAutoDetector:
         return self._collect_candidate_boxes(r, frame.shape)
 
     def _collect_candidate_boxes(self, r, frame_shape: tuple[int, ...]) -> list[tuple[int, int, int, int, float]]:
+        """从 YOLO 结果中提取满足条件的候选框列表。"""
         h_img, w_img = frame_shape[:2]
         out: list[tuple[int, int, int, int, float]] = []
         for box in getattr(r, 'boxes', []):
@@ -109,6 +140,7 @@ class YOLOAutoDetector:
 
     @staticmethod
     def _is_vertical(b: tuple[int, int, int, int, float]) -> bool:
+        """判断候选框是否“竖直”（高>宽）。"""
         x1, y1, x2, y2, _ = b
         w = max(1, x2 - x1)
         h = max(1, y2 - y1)
@@ -116,6 +148,7 @@ class YOLOAutoDetector:
 
     @staticmethod
     def _center_distance2(b: tuple[int, int, int, int, float], cx_img: float, cy_img: float) -> float:
+        """计算框中心到图像中心的平方距离。"""
         x1, y1, x2, y2, _ = b
         cx = (x1 + x2) / 2.0
         cy = (y1 + y2) / 2.0
@@ -124,6 +157,13 @@ class YOLOAutoDetector:
         return dx * dx + dy * dy
 
     def detect(self, frame) -> list[tuple[int, int, int, int, float]]:
+        """返回一个“最合适”的竖直交通灯候选框（若存在）。
+
+        策略：
+        - 仅竖直框参与评估
+        - 以中心距离为主关键字、置信度为次关键字进行最小化选择
+        - 找不到合适框返回空列表
+        """
         boxes = self._predict_and_collect(frame)
         if not boxes:
             self.last_state = "none"
@@ -144,6 +184,7 @@ class YOLOAutoDetector:
     def detect_orientations(
         self, frame
     ) -> tuple[list[tuple[int, int, int, int, float]], list[tuple[int, int, int, int, float]]]:
+        """同时返回竖直与水平两类候选框列表。"""
         boxes = self._predict_and_collect(frame)
         if not boxes:
             self.last_state = "none"

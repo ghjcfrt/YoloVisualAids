@@ -1,6 +1,6 @@
 """GUI 启动"""
 
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import contextlib
 import logging
@@ -88,8 +88,11 @@ class MainWindow(QWidget):
         set_speaker(self._tts.speak)
         self._voice_ctrl = None
         self._init_voice_control()
+        # 默认关闭调试日志输出
+        self._apply_debug_logging(enabled=False)
 
     def _build_ui(self) -> None:
+        """构建主界面布局"""
         layout = QVBoxLayout(self)
         self._init_status_bar(layout)
         self._init_mode_box(layout)
@@ -99,6 +102,7 @@ class MainWindow(QWidget):
         self._update_mode_visibility()
 
     def _init_status_bar(self, layout: QVBoxLayout) -> None:
+        """初始化状态栏"""
         self.status = QStatusBar()
         self.status.setSizeGripEnabled(False)
         self.status.setFixedHeight(STATUS_BAR_HEIGHT)
@@ -107,6 +111,7 @@ class MainWindow(QWidget):
         self.status.showMessage("就绪")
 
     def _flash_status(self, msg: str, ms: int = 2000, fallback: str = "就绪") -> None:
+        """临时显示一条状态消息 到期恢复为 fallback"""
         self.status.showMessage(msg)
         expected = msg
 
@@ -118,6 +123,7 @@ class MainWindow(QWidget):
         QTimer.singleShot(ms, _restore)
 
     def _init_mode_box(self, layout: QVBoxLayout) -> None:
+        """初始化模式选择区 一般与高级"""
         mode_box = QGroupBox("模式")
         mode_layout = QHBoxLayout(mode_box)
         mode_layout.setContentsMargins(8, 6, 8, 6)
@@ -132,6 +138,7 @@ class MainWindow(QWidget):
         layout.addWidget(mode_box)
 
     def _init_general_box(self, layout: QVBoxLayout) -> None:
+        """初始化一般模式 参数包含模型与摄像头"""
         self.general_box = QGroupBox("一般 (模型 + 摄像头)")
         gen_form = QFormLayout(self.general_box)
         self.model_line_simple = QLineEdit(self.defaults.model_path)
@@ -164,6 +171,7 @@ class MainWindow(QWidget):
         layout.addWidget(self.general_box)
 
     def _init_adv_box(self, layout: QVBoxLayout) -> None:
+        """初始化高级参数区域"""
         self.adv_box = QGroupBox("高级参数")
         form = QFormLayout(self.adv_box)
         self._add_model_row(form)
@@ -178,10 +186,12 @@ class MainWindow(QWidget):
         self._add_timestamp_row(form)
         self._add_exit_key_row(form)
         self._add_show_fps_row(form)
+        self._add_debug_log_row(form)
         self._add_announcer_rows(form)
         layout.addWidget(self.adv_box)
 
     def _add_model_row(self, form: QFormLayout) -> None:
+        """添加模型权重选择行"""
         self.model_line = QLineEdit(self.defaults.model_path)
         btn_model = QPushButton("选择...")
         btn_model.clicked.connect(self._choose_model)
@@ -191,11 +201,13 @@ class MainWindow(QWidget):
         form.addRow("模型权重", mh)
 
     def _add_device_row(self, form: QFormLayout) -> None:
+        """添加运算设备选择行"""
         self.device_combo = QComboBox()
         self._populate_devices()
         form.addRow("运算设备", self.device_combo)
 
     def _add_source_row(self, form: QFormLayout) -> None:
+        """添加视频源输入行 支持索引或文件路径"""
         self.source_line = QLineEdit(str(self.defaults.source))
         btn_source = QPushButton("视频文件...")
         btn_source.clicked.connect(self._choose_source)
@@ -205,6 +217,7 @@ class MainWindow(QWidget):
         form.addRow("视频源", sh)
 
     def _add_adv_cam_row(self, form: QFormLayout) -> None:
+        """添加高级模式下的摄像头列表"""
         self.adv_cam_combo = QComboBox()
         self.adv_cam_refresh_btn = QPushButton("刷新")
         self.adv_cam_refresh_btn.clicked.connect(lambda: self._refresh_cams(
@@ -226,6 +239,7 @@ class MainWindow(QWidget):
         )
 
     def _add_save_dir_row(self, form: QFormLayout) -> None:
+        """添加保存目录选择行"""
         self.save_dir_line = QLineEdit(self.defaults.save_dir)
         btn_dir = QPushButton("目录...")
         btn_dir.clicked.connect(self._choose_dir)
@@ -235,11 +249,13 @@ class MainWindow(QWidget):
         form.addRow("保存目录", dh)
 
     def _add_save_txt_row(self, form: QFormLayout) -> None:
+        """添加保存 txt 标注开关"""
         self.save_txt_chk = QCheckBox("保存 txt 标注")
         self.save_txt_chk.setChecked(self.defaults.save_txt)
         form.addRow("保存TXT", self.save_txt_chk)
 
     def _add_conf_row(self, form: QFormLayout) -> None:
+        """添加置信度阈值滑条"""
         self.conf_slider = QSlider(Qt.Orientation.Horizontal)
         self.conf_slider.setRange(0, 100)
         self.conf_slider.setValue(int(self.defaults.conf * 100))
@@ -253,30 +269,42 @@ class MainWindow(QWidget):
         form.addRow("置信度", ch)
 
     def _add_img_size_row(self, form: QFormLayout) -> None:
+        """添加输入尺寸设置 留空表示使用原始尺寸"""
         self.img_size_line = QLineEdit(
             "" if self.defaults.img_size is None else ",".join(str(i) for i in self.defaults.img_size)
         )
         form.addRow("输入尺寸", self.img_size_line)
 
     def _add_window_name_row(self, form: QFormLayout) -> None:
+        """添加窗口标题设置"""
         self.window_name_line = QLineEdit(self.defaults.window_name)
         form.addRow("窗口标题", self.window_name_line)
 
     def _add_timestamp_row(self, form: QFormLayout) -> None:
+        """添加时间戳格式设置"""
         self.timestamp_fmt_line = QLineEdit(self.defaults.timestamp_fmt)
         form.addRow("时间戳格式", self.timestamp_fmt_line)
 
     def _add_exit_key_row(self, form: QFormLayout) -> None:
+        """添加退出按键设置"""
         self.exit_key_line = QLineEdit(self.defaults.exit_key)
         self.exit_key_line.setMaxLength(2)
         form.addRow("退出按键", self.exit_key_line)
 
     def _add_show_fps_row(self, form: QFormLayout) -> None:
+        """添加是否显示 FPS 的开关"""
         self.show_fps_chk = QCheckBox("显示 FPS")
         self.show_fps_chk.setChecked(self.defaults.show_fps)
         form.addRow("显示FPS", self.show_fps_chk)
 
+    def _add_debug_log_row(self, form: QFormLayout) -> None:
+        """添加调试日志开关 仅影响本应用的语音相关日志"""
+        self.debug_log_chk = QCheckBox("调试日志输出")
+        self.debug_log_chk.setChecked(False)
+        form.addRow("调试日志", self.debug_log_chk)
+
     def _add_announcer_rows(self, form: QFormLayout) -> None:
+        """添加播报与黄闪相关参数行"""
         self.ann_min_interval_line = QLineEdit(str(getattr(self.defaults, 'ann_min_interval', 1.5)))
         form.addRow("播报最小间隔(秒)", self.ann_min_interval_line)
         self.ann_flash_window_line = QLineEdit(str(getattr(self.defaults, 'ann_flash_window', 3.0)))
@@ -289,6 +317,7 @@ class MainWindow(QWidget):
         form.addRow("黄闪冷却(秒)", self.ann_flash_cooldown_line)
 
     def _init_buttons(self, layout: QVBoxLayout) -> None:
+        """初始化启动 停止 恢复默认 按钮"""
         btn_row = QHBoxLayout()
         self.start_btn = QPushButton("启动检测")
         self.start_btn.clicked.connect(self.on_start)
@@ -303,6 +332,7 @@ class MainWindow(QWidget):
         layout.addLayout(btn_row)
 
     def _init_voice_control(self) -> None:
+        """初始化语音控制 如可用则启动关键词监听"""
         # 模型目录相对项目根: <repo_root>/models/vosk/vosk-model-small-cn-0.22
         repo_root = pathlib.Path(__file__).resolve().parents[1]
         model_dir = repo_root / "models" / "vosk" / "vosk-model-small-cn-0.22"
@@ -328,8 +358,13 @@ class MainWindow(QWidget):
         self.status.showMessage("语音控制已启用（可说：启动辅助系统 / 关闭辅助系统）")
 
     def _on_voice_start(self) -> None:
+        """语音触发启动检测 若已运行则提示"""
         _voice_log.debug("收到语音启动请求，当前是否已运行: %s", bool(self.worker and self.worker.is_alive()))
         if self.worker and self.worker.is_alive():
+            # 如果正在播报检测到xxx，应抑制“检测到xxx”，但仍播报“检测已在运行中”
+            if self._is_detection_speaking():
+                _voice_log.debug("已在运行中，且当前为检测播报 -> 清理/抑制检测播报，并保留状态提示")
+                self._suppress_detection_announcements()
             _voice_log.debug("已在运行中 -> 语音提示 '检测已在运行中'")
             self._speak("检测已在运行中")
             return
@@ -337,6 +372,7 @@ class MainWindow(QWidget):
         self.on_start()
 
     def _on_voice_stop(self) -> None:
+        """语音触发停止检测 若未运行则提示"""
         _voice_log.debug("收到语音停止请求，当前是否已运行: %s", bool(self.worker and self.worker.is_alive()))
         if not self.worker or not self.worker.is_alive():
             _voice_log.debug("未在运行 -> 语音提示 '当前没有正在运行的检测'")
@@ -345,7 +381,37 @@ class MainWindow(QWidget):
         _voice_log.debug("运行中 -> 调用 on_stop")
         self.on_stop()
 
+    def _is_detection_speaking(self) -> bool:
+        """判断 TTS 是否正在播报以“检测到”开头/包含的检测结果。
+
+        说明：检测播报通常来自 voice.announce 中的 "检测到：..."，
+        我们通过查询 TTSManager 的当前文本并去除零宽字符来判断。
+        """
+        tts_mgr = getattr(self, "_tts", None)
+        if not tts_mgr or not hasattr(tts_mgr, "is_busy") or not hasattr(tts_mgr, "get_current_text"):
+            return False
+        if not tts_mgr.is_busy():
+            return False
+        cur = tts_mgr.get_current_text() or ""
+        # 去除用于去重的零宽字符
+        for z in ("\u200b", "\u200c", "\u200d"):
+            cur = cur.replace(z, "")
+        return "检测到" in cur
+
+    def _suppress_detection_announcements(self) -> None:
+        """抑制/清队近期的“检测到 …”播报，避免打断状态提示。"""
+        tts_mgr = getattr(self, "_tts", None)
+        if not tts_mgr:
+            return
+        # 清理队列里可能尚未播出的“检测到 …”
+        if hasattr(tts_mgr, "clear_pending_substring"):
+            tts_mgr.clear_pending_substring("检测到")
+        # 在短时间内抑制新的“检测到 …”
+        if hasattr(tts_mgr, "suppress_substring"):
+            tts_mgr.suppress_substring("检测到", duration_sec=2.0)
+
     def _speak(self, text: str) -> None:
+        """通过 TTS 管理器播报一条文本"""
         if not text:
             _tts_log.debug("跳过播报: 文本为空")
             return
@@ -356,6 +422,7 @@ class MainWindow(QWidget):
         tts_mgr.speak(text)
 
     def _populate_devices(self) -> None:
+        """刷新设备下拉列表 默认选择配置中的设备"""
         self.device_combo.clear()
         self.device_combo.addItems(list_devices(torch))
         idx = self.device_combo.findText(self.defaults.device)
@@ -363,6 +430,7 @@ class MainWindow(QWidget):
             self.device_combo.setCurrentIndex(idx)
 
     def _choose_model_simple(self):
+        """选择模型权重文件 写入一般模式输入框"""
         path, _ = QFileDialog.getOpenFileName(
             self,
             "选择模型文件",
@@ -372,6 +440,7 @@ class MainWindow(QWidget):
             self.model_line_simple.setText(path)
 
     def _choose_model(self):
+        """选择模型权重文件 写入高级模式输入框"""
         path, _ = QFileDialog.getOpenFileName(
             self,
             "选择模型文件",
@@ -381,6 +450,7 @@ class MainWindow(QWidget):
             self.model_line.setText(path)
 
     def _choose_source(self):
+        """选择视频文件 写入视频源输入框"""
         path, _ = QFileDialog.getOpenFileName(
             self,
             "视频文件",
@@ -390,16 +460,19 @@ class MainWindow(QWidget):
             self.source_line.setText(path)
 
     def _choose_dir(self):
+        """选择保存目录 写入保存目录输入框"""
         path = QFileDialog.getExistingDirectory(self, "选择保存目录")
         if path:
             self.save_dir_line.setText(path)
 
     def _update_mode_visibility(self):
+        """根据模式切换显示一般区或高级区"""
         advanced = self.mode_combo.currentIndex() == 1
         self.adv_box.setVisible(advanced)
         self.general_box.setVisible(not advanced)
 
     def on_reset(self):
+        """恢复所有参数为默认值 并刷新界面"""
         self.defaults = YOLOConfig()
         self.model_line_simple.setText(self.defaults.model_path)
         self._refresh_cams(
@@ -438,6 +511,9 @@ class MainWindow(QWidget):
         self.timestamp_fmt_line.setText(self.defaults.timestamp_fmt)
         self.exit_key_line.setText(self.defaults.exit_key)
         self.show_fps_chk.setChecked(self.defaults.show_fps)
+        if hasattr(self, 'debug_log_chk'):
+            self.debug_log_chk.setChecked(False)
+            self._apply_debug_logging(enabled=False)
         if hasattr(self, 'ann_min_interval_line'):
             self.ann_min_interval_line.setText(str(getattr(self.defaults, 'ann_min_interval', 1.5)))
             self.ann_flash_window_line.setText(str(getattr(self.defaults, 'ann_flash_window', 3.0)))
@@ -447,9 +523,11 @@ class MainWindow(QWidget):
         self.status.showMessage("已恢复默认")
 
     def _build_argv(self, *, advanced: bool) -> list[str]:
+        """根据当前 UI 值构建 CLI 参数列表"""
         return self._build_argv_advanced() if advanced else self._build_argv_simple()
 
     def _build_argv_simple(self) -> list[str]:
+        """一般模式下仅包含模型与摄像头相关参数"""
         base = YOLOConfig()
         args: list[str] = []
         m = self.model_line_simple.text().strip()
@@ -474,9 +552,17 @@ class MainWindow(QWidget):
         return args
 
     def _build_argv_advanced(self) -> list[str]:
+        """高级模式下构建完整参数 仅加入与默认不同的项"""
         base = YOLOConfig()
         args: list[str] = []
+        self._argv_basic_options(args, base)
+        self._argv_conf_and_img(args, base)
+        self._argv_window_and_misc(args, base)
+        self._argv_announcer(args, base)
+        return args
 
+    def _argv_basic_options(self, args: list[str], base: YOLOConfig) -> None:
+        """基础选项：模型 设备 源 保存目录 文本标注"""
         def add_if_changed(flag: str, val: str, default: str) -> None:
             val_s = val.strip()
             if val_s and val_s != default:
@@ -489,6 +575,8 @@ class MainWindow(QWidget):
         if self.save_txt_chk.isChecked() and not base.save_txt:
             args.append("--save-txt")
 
+    def _argv_conf_and_img(self, args: list[str], base: YOLOConfig) -> None:
+        """阈值与尺寸"""
         conf_val = self.conf_slider.value() / 100.0
         if abs(conf_val - base.conf) > EPSILON:
             args.extend(["--conf", f"{conf_val}"])
@@ -497,6 +585,13 @@ class MainWindow(QWidget):
         img_text = self.img_size_line.text().strip()
         if img_text and img_text != base_img:
             args.extend(["--img-size", img_text])
+
+    def _argv_window_and_misc(self, args: list[str], base: YOLOConfig) -> None:
+        """窗口 标题 时间戳 退出按键 FPS"""
+        def add_if_changed(flag: str, val: str, default: str) -> None:
+            val_s = val.strip()
+            if val_s and val_s != default:
+                args.extend([flag, val_s])
 
         add_if_changed("--window-name", self.window_name_line.text(), base.window_name)
         add_if_changed("--timestamp-fmt", self.timestamp_fmt_line.text(), base.timestamp_fmt)
@@ -507,6 +602,8 @@ class MainWindow(QWidget):
         if not self.show_fps_chk.isChecked() and base.show_fps:
             args.append("--no-fps")
 
+    def _argv_announcer(self, args: list[str], base: YOLOConfig) -> None:
+        """播报相关参数"""
         def add_num(flag: str, text: str, default_val: float):
             s = text.strip()
             if not s:
@@ -534,12 +631,15 @@ class MainWindow(QWidget):
         add_int("--ann-flash-min-events", self.ann_flash_min_events_line.text(), int(getattr(base, 'ann_flash_min_events', 6)))
         add_num("--ann-flash-yellow-ratio", self.ann_flash_yellow_ratio_line.text(), float(getattr(base, 'ann_flash_yellow_ratio', 0.9)))
         add_num("--ann-flash-cooldown", self.ann_flash_cooldown_line.text(), float(getattr(base, 'ann_flash_cooldown', 5.0)))
-        return args
 
     def on_start(self):
+        """启动后台检测线程 并更新按钮与状态"""
         if self.worker and self.worker.is_alive():
             QMessageBox.information(self, "提示", "检测已在运行中")
             return
+        # 根据勾选应用调试日志等级
+        if hasattr(self, 'debug_log_chk'):
+            self._apply_debug_logging(enabled=self.debug_log_chk.isChecked())
         argv = self._build_argv(advanced=self.mode_combo.currentIndex() == 1)
         self.stop_event = threading.Event()
         signals = WorkerSignals()
@@ -553,6 +653,7 @@ class MainWindow(QWidget):
         self.reset_btn.setEnabled(False)
 
     def on_stop(self):
+        """请求停止后台检测 若未运行则提示"""
         if not self.worker or not self.worker.is_alive():
             _voice_log.debug("点击停止但未在运行 -> 弹出提示框")
             QMessageBox.information(self, "提示", "当前没有正在运行的检测")
@@ -563,6 +664,7 @@ class MainWindow(QWidget):
         self.status.showMessage("请求关闭... (等待当前帧) ")
 
     def _on_finished(self):
+        """后台线程结束后的收尾与按钮复位"""
         _voice_log.debug("工作线程已结束")
         self.status.showMessage("已结束")
         self.start_btn.setEnabled(True)
@@ -572,6 +674,7 @@ class MainWindow(QWidget):
         self.stop_event = None
 
     def closeEvent(self, event) -> None:
+        """关闭窗口时停止语音与 TTS 管理器 然后交由父类处理"""
         try:
             vc = getattr(self, "_voice_ctrl", None)
             if vc is not None:
@@ -589,6 +692,7 @@ class MainWindow(QWidget):
         return super().closeEvent(event)
 
     def _on_error(self, msg: str):
+        """处理后台错误 弹窗并重置按钮"""
         QMessageBox.critical(self, "错误", msg)
         self.status.showMessage("错误: " + msg)
         self.start_btn.setEnabled(True)
@@ -603,6 +707,7 @@ class MainWindow(QWidget):
         mapping: dict[str, int | str],
         current_source,
     ):
+        """刷新摄像头下拉列表 支持 DirectShow 名称或 WMI 名称"""
         combo.clear()
         mapping.clear()
         friendly_names: list[str] = []
@@ -644,6 +749,7 @@ class MainWindow(QWidget):
         self._maybe_warn_generic_names(friendly_names)
 
     def _on_cam_selected(self, combo: QComboBox, mapping: dict[str, int | str]):
+        """当选择某摄像头时 同步到视频源输入框"""
         if combo.currentIndex() < 0:
             return
         text = combo.currentText().strip()
@@ -662,6 +768,7 @@ class MainWindow(QWidget):
                     return
 
     def _maybe_warn_generic_names(self, names: list[str]):
+        """若摄像头名称均为默认 Camera n 或为空 则输出提示"""
         if not names or not hasattr(self, "status"):
             return
     # 若全部名称均为默认样式 "Camera n" 或为空，则提示；否则不提示
@@ -674,6 +781,21 @@ class MainWindow(QWidget):
 
         if all(_is_generic(n) for n in names):
             print("未获取到系统摄像头名称（可选依赖：pygrabber 或 Windows + pywin32），已使用默认 Camera n")
+
+    @staticmethod
+    def _apply_debug_logging(*, enabled: bool) -> None:
+        """根据开关启用或关闭调试日志 仅影响本应用内置语音日志"""
+        level = logging.DEBUG if enabled else logging.WARNING
+        try:
+            _voice_log.setLevel(level)
+            _tts_log.setLevel(level)
+        except Exception:
+            logging.exception("设置语音日志等级失败")
+        # 同步调整已存在 handler 的等级
+        for lg in (_voice_log, _tts_log):
+            for h in lg.handlers:
+                with contextlib.suppress(Exception):
+                    h.setLevel(level)
 
 
 def main() -> None:

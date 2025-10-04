@@ -45,11 +45,8 @@ class AudioConfig:
     dtype: str = "int16"
 
 
-# 默认关键词（可在此处集中维护）
-DEFAULT_KEYWORDS: list[str] = [
-    "启动辅助系统",
-    "停止辅助系统",
-]
+# 说明：默认关键词由上层（例如 GUI 的 VoiceController）提供；
+# 该模块不再内置默认关键词，保持为纯监听实现。
 
 
 @dataclass
@@ -76,9 +73,10 @@ class KeywordListener:
         audio: AudioConfig | None = None,
         options: KeywordOptions | None = None,
     ) -> None:
-        # 使用默认关键词（若未传入）
+        """初始化识别器与语法 归一化关键词并准备音频队列"""
+        # 不内置默认关键词；若未传入，则使用空列表（自由识别/不触发命中）
         if not keywords:
-            keywords = DEFAULT_KEYWORDS
+            keywords = []
         self.model = Model(model_path)
         # 构造受限语法（仅允许这些关键词）
         # 传入 JSON 数组字符串，允许包含空词来提升稳定度
@@ -110,10 +108,11 @@ class KeywordListener:
 
     @staticmethod
     def _normalize_text(text: str) -> str:
-        # 去除空白，统一为全字符串比较
+        """去除空白 统一为整串比较"""
         return "".join(str(text).split())
 
     def _is_hit(self, text: str) -> str | None:
+        """判断识别文本是否命中关键词 可选包含匹配"""
         t = self._normalize_text(text)
         if not t:
             return None
@@ -132,6 +131,7 @@ class KeywordListener:
         return None
 
     def _audio_callback(self, indata, _frames, _time, status) -> None:
+        """音频输入回调 将数据块入队 溢出时丢旧保实时"""
         if status:
             # 可按需打印或记录 status
             _kl_log.debug("sounddevice status: %s", status)
@@ -145,6 +145,7 @@ class KeywordListener:
                 self._q.put_nowait(bytes(indata))
 
     def _worker(self, on_keyword: Callable[[str], None] | None) -> None:
+        """后台线程 循环读音频驱动识别 命中触发回调"""
         # 打开输入流
         with sd.RawInputStream(
             samplerate=self.cfg.sample_rate,
@@ -183,12 +184,14 @@ class KeywordListener:
                     self._handle_partial(on_keyword)
 
     def _get_next_chunk(self) -> bytes | None:
+        """从队列取一段音频 超时返回 None"""
         try:
             return self._q.get(timeout=0.3)
         except queue.Empty:
             return None
 
     def _handle_final(self, on_keyword: Callable[[str], None] | None) -> None:
+        """处理最终结果 去抖与冷却控制"""
         try:
             res = json.loads(self._rec.Result())
         except json.JSONDecodeError:
@@ -225,6 +228,7 @@ class KeywordListener:
         self._last_partial_hit = None
 
     def _handle_partial(self, on_keyword: Callable[[str], None] | None) -> None:
+        """处理 partial 结果 支持可选触发与抑制"""
         try:
             partial = json.loads(self._rec.PartialResult()).get("partial", "").strip()
         except json.JSONDecodeError:
@@ -304,7 +308,7 @@ if __name__ == "__main__":
 
     if args.list_devices:
         print("默认设备:", sd.default.device)
-        print("输入设备列表(仅输入>=1通道):")
+        print("输入设备列表（仅输入通道数>=1）:")
         all_devs = sd.query_devices()
         for idx in range(len(all_devs)):
             try:
@@ -313,14 +317,14 @@ if __name__ == "__main__":
                 max_in_val = int(info_map.get("max_input_channels", 0))
                 name = str(info_map.get("name", f"device {idx}"))
             except (sd.PortAudioError, ValueError, TypeError, OSError) as exc:
-                logging.debug("query device %s failed: %s", idx, exc)
+                logging.debug("查询设备 %s 失败: %s", idx, exc)
                 continue
             if max_in_val >= 1:
-                print(f"[{idx}] {name} (inputs={max_in_val})")
+                print(f"[{idx}] {name}（输入通道数={max_in_val}）")
         raise SystemExit(0)
 
-    use_keywords = args.keywords or DEFAULT_KEYWORDS
-    print("使用的关键词：", ", ".join(use_keywords))
+    use_keywords = args.keywords or []
+    print("使用的关键词:", ", ".join(use_keywords))
 
     # 解析模型路径：命令行 > 环境变量 > 常见默认路径 > 交互输入
     model_path = args.model or os.environ.get("VOSK_MODEL")
@@ -338,7 +342,7 @@ if __name__ == "__main__":
         except EOFError:
             model_path = ""
     if not model_path:
-        print("未提供模型路径。可通过 --model 指定，或设置环境变量 VOSK_MODEL，或将模型解压到 ./models/vosk/vosk-model-small-cn-0.22")
+        print("未提供模型路径 可通过 --model 指定 或设置环境变量 VOSK_MODEL 或将模型解压到 ./models/vosk/vosk-model-small-cn-0.22")
         raise SystemExit(2)
 
     # 默认使用 free 模式；若传入 --grammar 则启用受限语法
@@ -352,11 +356,11 @@ if __name__ == "__main__":
     kl = KeywordListener(model_path=model_path, keywords=use_keywords, options=opts)
 
     if args.timeout is not None:
-        print("等待关键词（超时", args.timeout, "秒）...")
+        print("等待关键词 超时", args.timeout, "秒 ...")
         text = kl.listen(timeout=args.timeout)
-        print("命中：", text)
+        print("命中:", text)
     else:
-        print("开始监听，按 Ctrl+C 结束。关键词：", ", ".join(use_keywords))
+        print("开始监听 按 Ctrl+C 结束 关键词:", ", ".join(use_keywords))
         try:
             def _on_hit(t: str) -> None:
                 print("命中关键词:", t)

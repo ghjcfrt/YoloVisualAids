@@ -1,3 +1,14 @@
+"""交通灯颜色测试 CLI
+
+提供三种来源（互斥）：
+- --image: 单张图片
+- --dir:   目录批量
+- --cam:   摄像头索引
+
+支持两种 ROI 获取方式：
+- 手动框选（--roi 或交互）
+- YOLO 自动检测（--auto + 模型等参数）
+"""
 from __future__ import annotations
 
 import argparse

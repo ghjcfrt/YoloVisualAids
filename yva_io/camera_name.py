@@ -1,3 +1,9 @@
+"""Windows 摄像头设备信息（基于 WMI / pywin32，可选依赖）
+
+当 pywin32 不可用或非 Windows 环境时，本模块优雅降级为 no-op（返回空列表）。
+提供 `enumerate_cameras` 返回设备基本信息列表，供 UI 友好显示。
+"""
+
 from __future__ import annotations
 
 import os
@@ -41,6 +47,10 @@ class CameraEnumError(RuntimeError):
 
 
 def _connect_wmi():
+    """建立到 root\\cimv2 的 WMI 连接。
+
+    抛出 CameraEnumError 以便调用方统一处理。
+    """
     if win32com is None:
         msg = "win32com 未安装，无法执行 WMI 查询，请在 Windows 安装 pywin32"
         raise CameraEnumError(msg)
@@ -96,12 +106,12 @@ def _query_primary_devices(wmi_errs: tuple[type[BaseException], ...], *, verbose
         primary = list(_primary_query())
     except wmi_errs as e:
         if verbose:
-            print("[camera_name] Primary WMI 查询失败:", repr(e))
+            print("[camera_name] 主查询 WMI 失败:", repr(e))
         return []
     if not primary:
         return []
     if verbose:
-        print(f"[camera_name] Primary 匹配 {len(primary)} 个设备")
+        print(f"[camera_name] 主查询匹配 {len(primary)} 个设备")
     return [_to_info(i, d, source="PNPClass") for i, d in enumerate(primary)]
 
 
@@ -113,7 +123,7 @@ def _query_keyword_fallback_devices(
         fallback = list(_fallback_query())
     except wmi_errs as e:
         if verbose:
-            print("[camera_name] Fallback WMI 查询失败:", repr(e))
+            print("[camera_name] 回退查询 WMI 失败:", repr(e))
         return []
     devices: list[CameraDeviceInfo] = []
     for d in fallback:
@@ -121,7 +131,7 @@ def _query_keyword_fallback_devices(
         if name and KEYWORD_PATTERN.search(name):
             devices.append(_to_info(len(devices), d, source="KeywordFallback"))
     if verbose:
-        print(f"[camera_name] Keyword 回退匹配 {len(devices)} 个设备")
+        print(f"[camera_name] 关键词回退匹配 {len(devices)} 个设备")
     return devices
 
 
@@ -140,6 +150,10 @@ def enumerate_cameras(*, only_working: bool = True, verbose: bool | None = None)
     """返回摄像头设备列表（Windows / 需 pywin32）
 
     若依赖不可用或非 Windows，返回空列表
+
+    参数
+    - only_working: 仅返回状态为 OK/WORKING 的设备
+    - verbose: 控制是否打印调试输出（默认读环境变量 CAM_VERBOSE）
     """
     if win32com is None:
         return []

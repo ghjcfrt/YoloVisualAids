@@ -1,3 +1,8 @@
+"""播报工具与交通灯播报逻辑
+
+封装对象数量播报与交通灯状态播报 支持最小间隔与黄闪识别
+"""
+
 from __future__ import annotations
 
 import time
@@ -23,10 +28,7 @@ _speak_func = _speak_async or _noop
 
 
 def set_speaker(func) -> None:
-    """设置自定义播报函数（例如 TTSManager.speak）
-
-    注意：请在应用启动时调用一次，线程不安全
-    """
+    """设置自定义播报函数 例如 TTSManager.speak 建议在应用启动时调用一次"""
     globals()["_speak_func"] = func
 
 
@@ -51,7 +53,7 @@ def _measure_word(label_cn: str) -> str:
         "鸟": "只",
         "马": "匹",
         "羊": "只",
-        "奶牛": "头",
+            """带去重与节流以及黄灯闪烁识别的播报器"""
         "大象": "头",
         "斑马": "只",
         "长颈鹿": "只",
@@ -107,7 +109,7 @@ def speak_non_tl(counts: dict[int, int], prefix: str | None = "检测到") -> No
 
 
 class Announcer:
-    """带去重/节流与黄灯闪烁识别的播报器"""
+    """带去重与节流以及黄灯闪烁识别的播报器"""
 
     def __init__(
         self,

@@ -1,3 +1,12 @@
+"""交通灯颜色检测（基于 HSV 区域阈值 + 形态学后处理）
+
+流程：
+1) ROI 预处理：高斯模糊 + 尺寸限制 + BGR->HSV
+2) 分别按 H/S/V 阈值生成 red/yellow/green 二值掩码
+3) 形态学开闭去噪
+4) 综合“掩码面积占比 × 平均亮度”打分，选择得分最高类别
+5) 面积占比过小或得分为 0 时返回 unknown
+"""
 from __future__ import annotations
 
 from operator import itemgetter
@@ -15,6 +24,7 @@ MIN_AREA_RATIO = 0.002
 
 
 def _color_masks(hsv: np.ndarray) -> dict[str, np.ndarray]:
+    """根据 HSV 图像生成 red/yellow/green 掩码字典。"""
     h, s, v = cv2.split(hsv)
     red1 = cv2.inRange(h, np.full_like(h, 0), np.full_like(h, 10))
     red2 = cv2.inRange(h, np.full_like(h, 170), np.full_like(h, 180))
@@ -41,6 +51,7 @@ def _color_masks(hsv: np.ndarray) -> dict[str, np.ndarray]:
 
 
 def _preprocess_to_hsv(bgr_roi: np.ndarray) -> np.ndarray:
+    """预处理并转换为 HSV：限制最大边、轻度模糊以减少噪声。"""
     h, w = bgr_roi.shape[:2]
     max_side = max(h, w)
     if max_side > MAX_PREPROC_SIDE:
@@ -51,6 +62,7 @@ def _preprocess_to_hsv(bgr_roi: np.ndarray) -> np.ndarray:
 
 
 def _best_color(hsv: np.ndarray, masks: dict[str, np.ndarray]) -> tuple[str, float, float]:
+    """计算三色掩码的面积占比及亮度加权得分，返回最佳项。"""
     area = hsv.shape[0] * hsv.shape[1]
     v_channel = hsv[:, :, 2]
     scores: dict[str, float] = {}
@@ -68,6 +80,7 @@ def _best_color(hsv: np.ndarray, masks: dict[str, np.ndarray]) -> tuple[str, flo
 
 
 def detect_traffic_light_color(bgr_roi: np.ndarray) -> str:
+    """对 ROI 进行颜色分类，返回 red/yellow/green/unknown。"""
     if bgr_roi is None or bgr_roi.size == 0:
         return "unknown"
     h, w = bgr_roi.shape[:2]

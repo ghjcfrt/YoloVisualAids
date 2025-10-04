@@ -2,111 +2,67 @@
 
 YoloVisualAids 是一个基于 Ultralytics YOLOv11 的实时目标检测工具，提供图形界面与命令行两种使用方式。支持自动/手动 ROI 的交通灯颜色识别（红/黄/绿），并将检测结果帧、裁剪与可选的 YOLO txt 标签保存到本地。
 
-主要场景：摄像头实时检测、视频离线检测、交通灯颜色判别、Windows 下摄像头友好名称枚举。
+## 简介
 
-
-## 功能特性
-
-- 实时检测与保存
-  - 设备自动选择（auto/cuda/cpu/mps）
-  - 每帧保存到 `results/`，可选保存 YOLO txt
-  - 可叠加 FPS 显示（开关可控）
-- GUI 参数配置（`PySide6`）
-  - 一般/高级两种模式（一般模式只改模型与摄像头，高级可配置全部参数）
-  - 后台线程推理、可随时停止、恢复默认
-  - 摄像头友好名称下拉与刷新（Windows 使用 WMI，需 `pywin32`）
-- 交通灯颜色识别
-  - HSV 阈值分割 + 面积/亮度综合评分，鲁棒识别红/黄/绿
-  - 支持手动 ROI（交互框选）或 YOLO 自动裁剪 ROI
-  - 支持图片/目录/摄像头三种来源
-  - 自动保存交通灯 ROI 裁剪到 `results/traffic_lights/`
-- 环境变量与命令行双配置
-  - 环境变量前缀 `YV_`，命令行参数优先
-- 摄像头枚举与降噪
-  - 枚举 `0..N-1` 摄像头，发现可用后遇到连续失败可提前结束
-  - 可在“枚举阶段”抑制 OpenCV 低层错误日志
-\n+- 语音关键词识别（离线，可选）
-  - 使用 Vosk 本地 ASR + 受限语法，仅识别指定关键词（更稳）
-  - 独立模块 `keyword_listener.py`，便于在你的业务中回调触发
-
-
-## 目录结构（节选）
-
-  GUI 入口位于包内：`yolovisualaids/app/gui.py`
-- `yolovisualaids/detection/core.py`：核心检测与参数装载（命令行 + 环境变量）
-- `run_detect.py`：检测模式 CLI 入口
-- `yolovisualaids/vision/traffic_mode.py`：交通灯测试模式（图片/目录/摄像头 + 手动/自动 ROI）
-- `run_traffic.py`：交通灯模式 CLI 入口
-- `yolo_utils.py`：设备选择、尺寸解析、YOLO 自动检测封装
-- `color_detction.py`：HSV 颜色识别
-- `visual_styles.py`：中文标签与颜色样式
-- `roi_utils.py`：ROI 选择与工具
-- `camera_name.py`：Windows WMI 摄像头枚举（友好名称）
-- `results/`：检测输出目录（运行时生成）
+YoloVisualAids 是一个基于 Ultralytics YOLOv11 的实时目标检测与交通灯颜色识别项目，支持 GUI 与 CLI 两种使用方式：
+- 实时检测摄像头/视频，保存可视化结果和可选 YOLO txt 标签到 `results/`
+- 交通灯颜色识别（红/黄/绿），支持手动 ROI 与 YOLO 自动裁剪 ROI
+- Windows 下摄像头友好名称显示与刷新（可选依赖）
+- 可选离线语音关键词识别（Vosk），用于简单语音控制
 
 
 ## 环境要求
 
-- 操作系统：Windows 10/11（推荐）。Linux/macOS 也可运行 CLI；MPS 需 macOS 支持
+- 操作系统：Windows 10/11 推荐（CLI 在 Linux/macOS 也可运行；MPS 需 macOS 支持）
 - Python：3.11+
-- GPU：可选；若使用 CUDA，请确保本机驱动与 `torch==2.5.1+cu121` 匹配
-- 可选组件：
-  - 摄像头友好名称：`pywin32`
+- GPU：可选；若使用 CUDA，请与 `torch==2.5.1+cu121` 和驱动版本匹配
 
 
-## 安装与依赖
+## 安装
 
-项目使用 `pyproject.toml` 管理依赖，推荐使用 [uv](https://docs.astral.sh/uv/) 安装：
+项目使用 `pyproject.toml` 与 [uv](https://docs.astral.sh/uv/) 管理依赖，推荐如下安装：
 
 ```powershell
-# 1) 安装 uv
+# 安装 uv（若未安装）
 python -m pip install -U uv
 
-# 2) 同步依赖（已指定 pytorch-cu121 索引）
+# 同步依赖（已配置 pytorch-cu121 源）
 uv sync
 
-# 3) 验证环境
+# 验证
 uv run python -V
 ```
 
 说明：
-- `pyproject.toml` 已将 `torch/torchvision` 指向 CUDA 12.1 轮子。
-  - 若无 NVIDIA GPU 或不需 CUDA，可改为 CPU 版（移除自定义索引并安装 CPU 轮子）。
-- 仅 CLI 使用时，可不安装 `PySide6`（若用 `uv sync` 会按 `pyproject.toml` 全量安装）。
-
-不使用 uv 的简单方式（需已准备好合适的 torch/torchvision）：
-
-```powershell
-python -m pip install -U ultralytics PySide6 pywin32
-```
-
-可选：语音关键词识别所需依赖
-
-```powershell
-uv sync  # 已包含 vosk 与 sounddevice 依赖
-```
+- 若无需 CUDA，可改装 CPU 版 torch/torchvision（移除自定义索引，安装 CPU 轮子）。
+- 只用 CLI 时，可跳过 GUI 依赖，但使用 `uv sync` 会按 `pyproject.toml` 全量安装。
 
 
 ## 快速开始
 
-### 1) 图形界面（GUI）
+项目提供一个统一入口 `main.py`，以及可直接运行的模块入口。
+
+1) 启动 GUI（PySide6）
 
 ```powershell
-uv run python -m yolovisualaids.app
+# 方式 A：统一入口
+uv run python .\main.py
+
+# 方式 B：直接运行模块
+uv run python -m app.gui
 ```
 
-说明：
-- 一般/高级两种模式，摄像头支持友好名称显示与刷新。
-- 启动/停止/恢复默认；结果帧保存到 `results/`，交通灯裁剪保存到 `results/traffic_lights/`。
-
-
-### 2) 命令行实时检测（YOLO）
+2) 命令行实时检测（YOLO）
 
 ```powershell
-uv run python -m yolovisualaids.detection --model models/yolo/yolo11n.pt --source 0 --conf 0.5 --save-txt
+# 方式 A：统一入口
+uv run python .\main.py detect --model models\yolo\yolo11n.pt --source 0 --conf 0.5 --save-txt
+
+# 方式 B：直接运行模块
+uv run python -m detection.cli --model models\yolo\yolo11n.pt --source 0 --conf 0.5 --save-txt
 ```
 
-常用参数（更多见下文“参数与环境变量”）：
+常用参数：
 - `--model` 模型权重（默认 `models/yolo/yolo11n.pt`）
 - `--device` 设备：`auto`/`cuda`/`cuda:N`/`cpu`/`mps`
 - `--source` 视频源：摄像头索引（如 0）或视频文件路径
@@ -116,142 +72,232 @@ uv run python -m yolovisualaids.detection --model models/yolo/yolo11n.pt --sourc
 - `--img-size` 推理尺寸：`640` 或 `640,640`；留空表示以原始帧尺寸为目标
 - `--window-name`/`--timestamp-fmt`/`--exit-key`/`--no-fps` 等
 
-键位：窗口聚焦时按 `q`（或自定义 `--exit-key`）退出。
+窗口聚焦时按 `q`（或 `--exit-key` 指定）退出。
 
-
-### 3) 交通灯颜色识别（图片/目录/摄像头）
-
-手动 ROI（交互框选）或 YOLO 自动裁剪 ROI 二选一：
+3) 交通灯颜色识别（图片/目录/摄像头）
 
 ```powershell
-# 新的模块入口（推荐）
-uv run python -m yolovisualaids.vision.traffic_cli --image .\traffic_img\demo.jpg
-uv run python -m yolovisualaids.vision.traffic_cli --dir .\traffic_img
-uv run python -m yolovisualaids.vision.traffic_cli --cam 0
+# 方式 A：统一入口
+uv run python .\main.py traffic --image .\traffic_img\demo.jpg
+
+# 方式 B：直接运行模块
+uv run python -m vision.traffic_cli --image .\traffic_img\demo.jpg
+uv run python -m vision.traffic_cli --dir .\traffic_img
+uv run python -m vision.traffic_cli --cam 0
 
 # 自动 ROI（YOLO）示例（可叠加 --save-crops 保存裁剪）
-uv run python -m yolovisualaids.vision.traffic_cli --image .\traffic_img\demo.jpg --auto --model models/yolo/yolo11n.pt --conf 0.5 --device auto
+uv run python -m vision.traffic_cli --image .\traffic_img\demo.jpg --auto --model models\yolo\yolo11n.pt --conf 0.5 --device auto
 ```
 
 可选参数：
-- `--roi X Y W H` 指定矩形 ROI；不传则交互选择
-- `--auto` 启用 YOLO 自动检测并裁剪（默认处理 COCO 类别 9：traffic light）
-- `--class-id` 目标类别（默认 9），`--first` 仅取 1 个最佳框
-- `--img-size`/`--device`/`--conf` 同 YOLO 检测
-- `--save-crops DIR` 将自动裁剪的 ROI 保存到指定目录
+- `--roi X Y W H` 指定 ROI；不传则交互框选
+- `--auto` 启用 YOLO 自动检测并裁剪（默认类别 id=9：traffic light）
+- `--class-id` 目标类别（默认 9），`--first` 仅取 1 个最优框
+- 其余如 `--img-size`/`--device`/`--conf` 同上
+- `--save-crops DIR` 将自动裁剪的 ROI 保存到目录
 
-输出：
-- 识别结果绘制在窗口与控制台；
-- 自动模式的裁剪保存于 `results/traffic_lights/` 或 `--save-crops` 指定目录。
-
-
-### 4) 语音关键词识别（离线）
-
-用于只识别一小组“命令词”，离线、稳定、低资源：
-
-1) 下载并解压 Vosk 中文模型（示例：vosk-model-small-cn-0.22）：
-   - https://alphacephei.com/vosk/models
-2) 运行监听器（麦克风权限需开启）：
-
-```powershell
-uv run python -m yolovisualaids.voice.keyword_listener --model ".\\models\\vosk\\vosk-model-small-cn-0.22" --keywords 开始 停止 退出
-```
-
-集成到你的代码：
-
-```python
-from yolovisualaids.voice.keyword_listener import KeywordListener
-
-kl = KeywordListener(
-  model_path=".\\models\\vosk\\vosk-model-small-cn-0.22",
-  keywords=["开始", "停止", "保存图片", "退出"],
-)
-
-def on_hit(text: str) -> None:
-  print("命中关键词:", text)
-  # TODO: 在这里触发你的业务逻辑，例如：开始/停止检测、保存当前帧等
-
-kl.start(on_keyword=on_hit)
-# ...你的主循环...
-# 退出前：
-kl.stop()
-```
+输出文件：
+- `results/frame_{id}_{ts}.jpg`：每帧可视化
+- `results/frame_{id}_{ts}.txt`：YOLO txt（可选）
+- `results/traffic_lights/tl_{frameId}_{boxIndex}_{ts}_{color}.jpg`：交通灯裁剪
 
 
-## 参数与环境变量
+## 环境变量覆盖（前缀 YV_）
 
-所有参数既可由命令行传入，也可使用环境变量覆盖默认值（前缀 `YV_`）：
+除命令行外，也可用环境变量覆盖默认值（命令行优先）：
 
-- `MODEL_PATH` → `--model`（默认 `models/yolo/yolo11n.pt`）
-- `DEVICE` → `--device`（默认 `auto`）
-- `SOURCE` → `--source`（默认 `0`，纯数字且长度<6 视为摄像头索引）
-- `SAVE_DIR` → `--save-dir`（默认 `results`）
-- `SAVE_TXT` → `--save-txt`（布尔）
-- `SELECT_CAMERA` → `--select-camera`（启动时交互选择摄像头）
-- `MAX_CAM_INDEX` → `--max-cam`（摄像头枚举最大索引，默认 8）
-- `CONF` → `--conf`（默认 0.5）
-- `IMG_SIZE` → `--img-size`（如 `640` 或 `640,640`；留空表示用原始帧尺寸）
-- `WINDOW_NAME` → `--window-name`（默认 `YOLOv11 Detection`）
-- `TIMESTAMP_FMT` → `--timestamp-fmt`（默认 `%Y%m%d_%H%M%S`）
-- `EXIT_KEY` → `--exit-key`（默认 `q`）
-- `SHOW_FPS` → `--no-fps`（布尔，命令行为“关闭”开关）
-- `QUIET_CV` → `--quiet-cv`（抑制 OpenCV 摄像头错误日志）
-- `CAM_FAIL_LIMIT` → `--cam-fail-limit`（枚举连续失败上限，默认 3）
+- `YV_MODEL_PATH` → `--model`
+- `YV_DEVICE` → `--device`
+- `YV_SOURCE` → `--source`
+- `YV_SAVE_DIR` → `--save-dir`
+- `YV_SAVE_TXT` → `--save-txt`
+- `YV_SELECT_CAMERA` → `--select-camera`
+- `YV_MAX_CAM_INDEX` → `--max-cam`
+- `YV_CONF` → `--conf`
+- `YV_IMG_SIZE` → `--img-size`
+- `YV_WINDOW_NAME` → `--window-name`
+- `YV_TIMESTAMP_FMT` → `--timestamp-fmt`
+- `YV_EXIT_KEY` → `--exit-key`
+- `YV_SHOW_FPS` → `--no-fps`（布尔，命令行为“关闭”）
+- `YV_QUIET_CV` → `--quiet-cv`
+- `YV_CAM_FAIL_LIMIT` → `--cam-fail-limit`
 
-摄像头相关额外变量：
-- `YV_SUPPRESS_ENUM_ERRORS=1` 在枚举阶段临时降低 OpenCV 日志级别（默认开启）
+摄像头枚举阶段日志抑制：`YV_SUPPRESS_ENUM_ERRORS=1`（默认开启）。
 
 示例（PowerShell）：
 
 ```powershell
-$env:YV_MODEL_PATH = ".\\models\\yolo\\yolo11n.pt"
+$env:YV_MODEL_PATH = ".\models\yolo\yolo11n.pt"
 $env:YV_SOURCE = "0"
 $env:YV_CONF = "0.45"
-uv run python -m yolovisualaids.detection --save-txt
+uv run python -m detection.cli --save-txt
 ```
 
 
-## 摄像头选择与枚举
+## 目录结构（节选）
 
-- GUI：下拉框显示友好名称（Windows），可“刷新”；选中后同步到“视频源”。
-- CLI：
-  - 使用整型索引：`--source 0`
-  - 通过 `--select-camera` 启动时交互选择
-  - 枚举策略：发现至少 1 个可用摄像头后，若连续失败次数达到 `CAM_FAIL_LIMIT` 则提前结束，提高启动速度。
+```
+app/                # GUI 与后台线程
+  gui.py            # 主窗口（参数配置、摄像头选择、语音控制集成）
+  worker.py         # 检测后台线程与 Qt 信号
+
+detection/          # YOLO 检测核心与 CLI 封装
+  core.py           # YOLOConfig/YOLODetector，摄像头枚举、保存、TTS 播报
+  api.py            # 门面导出（供 GUI/CLI 复用）
+  cli.py            # 命令行入口（python -m detection.cli）
+
+vision/             # 交通灯颜色与相关工具
+  color_detection.py# HSV 颜色判定
+  traffic_logic.py  # 多框融合判断过街/等待等状态
+  traffic_cli.py    # 交通灯模式 CLI
+  traffic_mode.py   # 运行器（来源/ROI/YOLO 自动裁剪）
+  roi_utils.py      # ROI 与图像遍历工具
+  visual_styles.py  # 可视化中文标签与颜色
+
+voice/              # 可选：TTS 与语音关键词
+  tts.py, tts_queue.py, announce.py
+  keyword_listener.py, voice_control.py
+
+yva_io/             # 设备与摄像头名称工具
+  camera_utils.py, camera_name.py, device_utils.py
+
+models/             # 放置模型（例如 models/yolo/yolo11n.pt, models/vosk/...）
+results/            # 运行输出
+docs/STRUCTURE.md   # 目录说明
+main.py             # 统一入口（gui/detect/traffic 路由）
+pyproject.toml      # 依赖与工具配置（uv、ruff 等）
+```
 
 
-## 输出与文件组织
+## 技术实现与算法逻辑
 
-- `results/frame_{id}_{timestamp}.jpg`：每帧可视化结果
-- `results/frame_{id}_{timestamp}.txt`：可选 YOLO txt（中心点与宽高为归一化值）
-- `results/traffic_lights/tl_{frameId}_{boxIndex}_{timestamp}_{color}.jpg`：交通灯 ROI 裁剪
+### 整体架构与数据流
+
+- 统一入口 `main.py` 将命令路由至：
+  - GUI：`app.gui.MainWindow`（PySide6）
+  - YOLO 检测 CLI：`detection.cli` → `detection.core`
+  - 交通灯模式 CLI：`vision.traffic_cli` → `vision.traffic_mode`
+- 检测核心：`detection/core.py`
+  - 构造 `YOLOConfig`（支持命令行 + 环境变量 YV_ 前缀，命令行优先）
+  - `YOLODetector` 加载 Ultralytics YOLO 模型，循环读取视频帧并推理
+  - 绘制结果、叠加 FPS、保存每帧与可选 YOLO txt；对交通灯 ROI 另存裁剪
+  - 结合 `vision` 模块给交通灯打中文标签，并通过 `voice.Announcer` 做 TTS 播报（去重/限流/黄闪识别）
+- 交通灯模式：`vision/traffic_mode.py` + `vision/traffic_cli.py`
+  - 支持图片/目录/摄像头输入；支持手动 ROI（交互/参数）与 YOLO 自动裁剪 ROI 两种方式
+  - 自动模式使用 `detection/yolo_utils.py` 的轻量封装（挑选 class_id=9 的框）
+- GUI：`app/gui.py` + `app/worker.py`
+  - 主线程纯 UI；检测在 `DetectionWorker` 线程中运行，通过 Qt 信号回传完成/错误
+  - 支持摄像头友好名（`yva_io`）、可选离线语音关键字（Vosk）、TTS 队列去抖
+
+
+### YOLO 检测流水线（detection/core.py）
+
+1) 设备选择：
+  - `auto` 优先 `cuda`，再 `mps`，否则 `cpu`（`torch.cuda.is_available()` / `torch.backends.mps.is_available()`）
+2) 输入尺寸：
+  - 若 `--img-size` 未设，则以“原始帧尺寸”作为目标推理尺寸 `imgsz=[h,w]`，减少拉伸与比例失真
+  - 否则按传入的 `640` 或 `640,640` 执行
+3) 交通灯候选框：
+  - 从 YOLO 结果中筛选 `class_id=9 (traffic light)` 的框，取整像素并裁剪边界
+  - 对每个框 ROI 执行颜色判定，绘制中文标签（见下节）并保存裁剪图 `results/traffic_lights/`
+4) YOLO txt 导出：
+  - 将每帧的检测框转换为归一化 `x_center y_center width height` 格式保存为 `frame_*.txt`
+5) FPS 显示：
+  - 指数滑动平均平滑 FPS：新 FPS 用 0.1 权重更新，抑制抖动
+6) OpenCV 摄像头：
+  - Windows 优先 `cv2.CAP_DSHOW` 打开整型索引摄像头；读取失败计数超过阈值提前退出
+  - 支持抑制 OpenCV 低层枚举错误日志（仅在“摄像头枚举阶段”临时降低日志级别）
+
+
+### 交通灯颜色识别（vision/color_detection.py）
+
+目标：对单个 ROI（交通灯框）判断 red/yellow/green/unknown。
+
+核心步骤：
+1) 预处理：
+  - 限制最长边至 320 像素，并做轻度高斯模糊，转换 BGR→HSV
+2) 三色掩码：
+  - red：H 通道采用“低段 + 高段”两个范围合并（应对环绕），叠加 S/V 阈值过滤
+  - yellow：H≈[15,35]，叠加 S≥阈值、V≥阈值
+  - green：H≈[40,85]，叠加 S≥阈值、V≥阈值
+  - 对每个掩码做一次开-闭操作去噪
+3) 打分与阈值：
+  - 对每色计算掩码面积占比 ratio 与掩码区域 V 通道平均亮度 v
+  - 记分公式：$score = ratio \times (v/255)^{1.2}$
+  - 选择分数最高的颜色作为候选；若面积占比低于阈值或得分为 0，则判定为 unknown
+
+说明：
+- 该方法对“亮度显著”的红/黄/绿圆点有较好鲁棒性；复杂场景可根据相机与环境微调 S/V 阈值或次幂因子。
+
+
+### 交通灯状态融合逻辑（vision/traffic_logic.py）
+
+输入：一帧图像 + 一组 YOLO 候选框（整型像素坐标 + 置信度）。
+
+策略：
+1) 方向分类：按“高>宽”为纵向，将候选拆为“竖直灯”和“水平灯”两组
+2) 竖直灯：
+  - 若多框，先选“距图像中心最近，置信度次排序”的单框，取其颜色
+3) 水平灯：
+  - 若多框，分别取色，若存在有效色且全部相同则输出该色，否则输出“颜色不同/不工作”类提示
+4) 兜底：
+  - 无候选 → “无红绿灯”；竖直存在但无法定色 → “红绿灯不工作” 等
+
+可选播报（detection/core.py）：
+- `voice.Announcer` 结合窗口与采样计数识别“黄闪”场景；同一内容播报最小间隔限制，避免刷屏与重读。
+  - 可调参数：`ann_min_interval`、`ann_flash_window`、`ann_flash_min_events`、`ann_flash_yellow_ratio`、`ann_flash_cooldown`
+
+
+### 轻量 YOLO 封装（detection/yolo_utils.py）
+
+用于交通灯自动 ROI 模式：
+- 仅抽取给定 `class_id`（默认 9）框，并过滤过小框（边长 < 8 像素）
+- 先按置信度降序，再按“距图像中心的平方距离 + 置信度次排序”挑选最优竖直框
+- 提供 `detect_orientations()` 同时返回竖直/水平两类框，供业务自行融合
+
+设备选择：
+- `auto` → CUDA> MPS> CPU，若 `torch` 不可用则回退 CPU。
+
+
+### GUI 线程与语音集成（app/gui.py, app/worker.py, voice/*）
+
+- 检测运行在后台线程 `DetectionWorker`，通过 Qt 信号回报 `finished/error`，避免阻塞 UI
+- 语音关键字：使用 `voice.keyword_listener`（Vosk + sounddevice）离线识别，支持受限语法与包含匹配、冷却抑制
+- TTS：`voice.tts_queue.TTSManager` 管理播报队列，提供去重与“抑制包含‘检测到’的播报”能力，避免与状态播报互扰
+- 摄像头友好名：`yva_io.camera_utils/camera_name` 结合 DirectShow 或 WMI 获取友好名称；无依赖则回退为 `Camera n`
+
+
+### 边界与可靠性措施
+
+- 帧读取失败：累计连续失败数，超过阈值提前结束，避免长时间空转
+- OpenCV 日志抑制：仅在“枚举摄像头”阶段降低日志级别，避免刷屏，但不影响运行阶段日志
+- 文本导出：YOLO txt 使用统一归一化格式，便于再训练或标注复核
+- FPS 平滑：指数滑动平均抑制抖动，读数更稳定
+- Windows 打开摄像头：整型索引默认使用 `CAP_DSHOW`，兼容性更好
 
 
 ## 常见问题（FAQ）
 
-1) 启动报 CUDA/torch 相关错误？
-- 使用 `--device cpu` 强制 CPU；或根据本地环境安装匹配的 `torch/torchvision`（CUDA 版本需与驱动匹配）。
+1) CUDA/torch 报错？
+- 使用 `--device cpu`；或安装与你驱动匹配的 CUDA 版 `torch/torchvision`。
 
 2) 打不开摄像头或黑屏？
-- 确认 `--source` 索引正确，尝试换 `0/1/2`；关闭占用摄像头的软件；在 Windows 设备管理器检查摄像头是否可用。
+- 确认索引正确，尝试 0/1/2；关闭占用摄像头的软件；在 Windows 设备管理器检查设备。
 
-3) GUI 无法启动或报 Qt 相关异常？
-- 确认已安装 `PySide6`；无显示环境时请用命令行模式运行。
+3) GUI 启动失败（Qt 异常）？
+- 确认安装 `PySide6`；无显示环境改用 CLI。
 
-4) Windows 下摄像头没有显示友好名称？
-- 安装 `pywin32`（`camera_name.py` 使用 WMI），否则显示 `Camera n`。
+4) Windows 下无友好名称？
+- 安装 `pywin32`（`yva_io/camera_name.py` 使用 WMI），否则显示 `Camera n`。
 
-5) 交通灯未检测到或颜色不稳定？
-- 调整 `--conf` 与 `--img-size`，或使用手动 ROI；环境光很暗/很亮时可适当调整位置与尺寸。
-
-6) 语音关键词识别没反应或报设备错误？
-- 确认已安装依赖并下载模型；在“系统-隐私-麦克风”里允许应用访问；必要时在命令行指定设备索引 `--device`。
+5) 交通灯颜色不稳定？
+- 调整 `--conf` 与 `--img-size`，或使用手动 ROI；注意场景光照与距离。
 
 
 ## 致谢
 
-- [Ultralytics YOLO](https://github.com/ultralytics/ultralytics)
+- Ultralytics YOLO
 
-
-—— 如有问题或建议，欢迎提交 Issue。
+如有问题或建议，欢迎提交 Issue。
+- `EXIT_KEY` → `--exit-key`（默认 `q`）
 
