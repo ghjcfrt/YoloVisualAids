@@ -1,16 +1,12 @@
 """
-离线关键词监听（特定词汇语音识别）
+离线关键词监听（特定词汇语音识别）——包内版本
 
 基于 Vosk + sounddevice 实现：
-- 仅针对给定关键词/短语进行识别（语法约束，误识别率更低）。
-- 完全离线；Windows/macOS/Linux 通用。
-- 提供同步阻塞的 listen() 与后台线程 start()/stop() 两种方式。
-
-注意：
-- 关键词最好用常见发音、简洁两三字词，过长句子不如命令词稳定。
-- 声卡采样率通常 16000/44100/48000。默认会自动检测并转换到 16000Hz 单声道。
-- 如遇麦克风权限或设备问题，请先在系统设置里确认可录音。
+- 仅针对给定关键词/短语进行识别（语法约束，降低误识别率）
+- 完全离线；Windows/macOS/Linux 通用
+- 提供同步阻塞的 listen() 与后台线程 start()/stop() 两种方式
 """
+
 from __future__ import annotations
 
 import contextlib
@@ -27,7 +23,7 @@ from typing import TYPE_CHECKING, Any, cast
 import sounddevice as sd
 from vosk import KaldiRecognizer, Model
 
-if TYPE_CHECKING:  # type-only imports
+if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
 # 独立日志器，避免污染全局 root logger
@@ -70,7 +66,7 @@ class KeywordOptions:
 
 
 class KeywordListener:
-    """基于 Vosk 的本地关键词监听器。"""
+    """基于 Vosk 的本地关键词监听器"""
 
     def __init__(
         self,
@@ -85,7 +81,7 @@ class KeywordListener:
             keywords = DEFAULT_KEYWORDS
         self.model = Model(model_path)
         # 构造受限语法（仅允许这些关键词）
-        # 注意：传入 JSON 数组字符串，允许包含空词来提升稳定度
+        # 传入 JSON 数组字符串，允许包含空词来提升稳定度
         self.grammar = json.dumps(list(dict.fromkeys([str(k).strip() for k in keywords if str(k).strip()])))
         self.cfg = audio or AudioConfig()
         opt = options or KeywordOptions()
@@ -129,14 +125,13 @@ class KeywordListener:
                     return k
             return t
         # 包含匹配仅允许“识别文本包含完整关键词”，不允许“关键词包含识别文本”
-        # 这样可以避免短词（如“停止”）误触发长关键词（如“停止辅助系统”）
         if self.match_contains:
             for k in self._keywords:
                 if k and (k in t):
                     return k
         return None
 
-    def _audio_callback(self, indata, _frames, _time, status) -> None:  # type: ignore[override]
+    def _audio_callback(self, indata, _frames, _time, status) -> None:
         if status:
             # 可按需打印或记录 status
             _kl_log.debug("sounddevice status: %s", status)
@@ -164,16 +159,20 @@ class KeywordListener:
                     default_in = None
                     try:
                         default_in = sd.default.device[0]
-                    except Exception:  # noqa: BLE001
+                    except (TypeError, IndexError, AttributeError):
                         default_in = None
                     dev_info = sd.query_devices(self.device, 'input') if self.device is not None else (
                         sd.query_devices(default_in, 'input') if default_in is not None else {}
                     )
-                except Exception:  # noqa: BLE001
+                except (sd.PortAudioError, ValueError, TypeError, OSError):
                     dev_info = {}
                 _kl_log.debug("Using input device: %s", dev_info)
-                _kl_log.debug("Recognizer mode: %s, sample_rate=%s, channels=%s",
-                              "grammar" if self.use_grammar else "free", self.cfg.sample_rate, self.cfg.channels)
+                _kl_log.debug(
+                    "Recognizer mode: %s, sample_rate=%s, channels=%s",
+                    "grammar" if self.use_grammar else "free",
+                    self.cfg.sample_rate,
+                    self.cfg.channels,
+                )
             while not self._stop.is_set():
                 data = self._get_next_chunk()
                 if data is None:
@@ -207,7 +206,9 @@ class KeywordListener:
                     if self.debug:
                         _kl_log.debug(
                             "final suppressed due to recent partial: %s (%.2fs since partial, window=%.2fs)",
-                            hit, now - last_p, self.partial_final_window,
+                            hit,
+                            now - last_p,
+                            self.partial_final_window,
                         )
                     self._last_partial_hit = None
                     return
@@ -216,7 +217,11 @@ class KeywordListener:
                 self._last_hit_at[hit] = now
                 on_keyword(hit)
             elif self.debug:
-                _kl_log.debug("final suppressed by cooldown: %s (%.2fs remaining)", hit, self.repeat_cooldown - (now - last))
+                _kl_log.debug(
+                    "final suppressed by cooldown: %s (%.2fs remaining)",
+                    hit,
+                    self.repeat_cooldown - (now - last),
+                )
         self._last_partial_hit = None
 
     def _handle_partial(self, on_keyword: Callable[[str], None] | None) -> None:
@@ -243,10 +248,14 @@ class KeywordListener:
                 self._last_hit_at[hit] = now
                 on_keyword(hit)
             elif self.debug:
-                _kl_log.debug("partial suppressed by cooldown: %s (%.2fs remaining)", hit, self.repeat_cooldown - (now - last))
+                _kl_log.debug(
+                    "partial suppressed by cooldown: %s (%.2fs remaining)",
+                    hit,
+                    self.repeat_cooldown - (now - last),
+                )
 
     def start(self, on_keyword: Callable[[str], None] | None = None) -> None:
-        """在后台线程启动监听。"""
+        """在后台线程启动监听"""
         if self._th and self._th.is_alive():
             return
         self._stop.clear()
@@ -254,13 +263,13 @@ class KeywordListener:
         self._th.start()
 
     def stop(self) -> None:
-        """停止监听并等待线程退出。"""
+        """停止监听并等待线程退出"""
         self._stop.set()
         if self._th and self._th.is_alive():
             self._th.join(timeout=2.0)
 
     def listen(self, timeout: float | None = None) -> str | None:
-        """阻塞式等待一次关键词命中，返回文本；超时返回 None。"""
+        """阻塞式等待一次关键词命中，返回文本；超时返回 None"""
         hit: list[str | None] = [None]
         evt = threading.Event()
 
@@ -303,7 +312,7 @@ if __name__ == "__main__":
                 info_map = cast("dict[str, Any]", info)
                 max_in_val = int(info_map.get("max_input_channels", 0))
                 name = str(info_map.get("name", f"device {idx}"))
-            except Exception as exc:  # noqa: BLE001
+            except (sd.PortAudioError, ValueError, TypeError, OSError) as exc:
                 logging.debug("query device %s failed: %s", idx, exc)
                 continue
             if max_in_val >= 1:
@@ -317,7 +326,7 @@ if __name__ == "__main__":
     model_path = args.model or os.environ.get("VOSK_MODEL")
     if not model_path:
         candidates = [
-            Path("models") / "vosk-model-small-cn-0.22"
+            Path("models") / "vosk" / "vosk-model-small-cn-0.22"
         ]
         for c in candidates:
             if c.exists() and c.is_dir():
@@ -329,7 +338,7 @@ if __name__ == "__main__":
         except EOFError:
             model_path = ""
     if not model_path:
-        print("未提供模型路径。可通过 --model 指定，或设置环境变量 VOSK_MODEL，或将模型解压到 ./models/vosk-model-small-cn-0.22。")
+        print("未提供模型路径。可通过 --model 指定，或设置环境变量 VOSK_MODEL，或将模型解压到 ./models/vosk/vosk-model-small-cn-0.22")
         raise SystemExit(2)
 
     # 默认使用 free 模式；若传入 --grammar 则启用受限语法

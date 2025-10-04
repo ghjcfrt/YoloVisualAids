@@ -53,6 +53,9 @@ traffic_img/
 data/
 datasets/
 
+#models
+models/
+
 # Test
 test.py
 test1.py

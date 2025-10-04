@@ -32,10 +32,10 @@ YoloVisualAids 是一个基于 Ultralytics YOLOv11 的实时目标检测工具�
 
 ## 目录结构（节选）
 
-- `app.py`：GUI 主程序
-- `YOLO_detection.py`：核心检测与参数装载（命令行 + 环境变量）
+  GUI 入口位于包内：`yolovisualaids/app/gui.py`
+- `yolovisualaids/detection/core.py`：核心检测与参数装载（命令行 + 环境变量）
 - `run_detect.py`：检测模式 CLI 入口
-- `traffic_mode.py`：交通灯测试模式（图片/目录/摄像头 + 手动/自动 ROI）
+- `yolovisualaids/vision/traffic_mode.py`：交通灯测试模式（图片/目录/摄像头 + 手动/自动 ROI）
 - `run_traffic.py`：交通灯模式 CLI 入口
 - `yolo_utils.py`：设备选择、尺寸解析、YOLO 自动检测封装
 - `color_detction.py`：HSV 颜色识别
@@ -92,7 +92,7 @@ uv sync  # 已包含 vosk 与 sounddevice 依赖
 ### 1) 图形界面（GUI）
 
 ```powershell
-uv run python app.py
+uv run python -m yolovisualaids.app
 ```
 
 说明：
@@ -103,15 +103,11 @@ uv run python app.py
 ### 2) 命令行实时检测（YOLO）
 
 ```powershell
-# 推荐入口
-uv run python app.py --model yolo11n.pt --save-txt
-
-# 或直接调用核心脚本（参数相同）
-uv run python YOLO_detection.py --model yolo11n.pt --source 0 --conf 0.5 --save-txt
+uv run python -m yolovisualaids.detection --model models/yolo/yolo11n.pt --source 0 --conf 0.5 --save-txt
 ```
 
 常用参数（更多见下文“参数与环境变量”）：
-- `--model` 模型权重（默认 `yolo11n.pt`）
+- `--model` 模型权重（默认 `models/yolo/yolo11n.pt`）
 - `--device` 设备：`auto`/`cuda`/`cuda:N`/`cpu`/`mps`
 - `--source` 视频源：摄像头索引（如 0）或视频文件路径
 - `--save-dir` 输出目录（默认 `results`）
@@ -128,17 +124,13 @@ uv run python YOLO_detection.py --model yolo11n.pt --source 0 --conf 0.5 --save-
 手动 ROI（交互框选）或 YOLO 自动裁剪 ROI 二选一：
 
 ```powershell
-# 单张图片（手动 ROI）
-uv run python run_traffic.py --image .\traffic_img\demo.jpg
+# 新的模块入口（推荐）
+uv run python -m yolovisualaids.vision.traffic_cli --image .\traffic_img\demo.jpg
+uv run python -m yolovisualaids.vision.traffic_cli --dir .\traffic_img
+uv run python -m yolovisualaids.vision.traffic_cli --cam 0
 
-# 目录批处理（手动 ROI；q 退出，r 重新选 ROI）
-uv run python run_traffic.py --dir .\traffic_img
-
-# 摄像头（手动 ROI）
-uv run python run_traffic.py --cam 0
-
-# 使用 YOLO 自动裁剪 ROI（可叠加 --save-crops 保存裁剪）
-uv run python run_traffic.py --image .\traffic_img\demo.jpg --auto --model yolo11n.pt --conf 0.5 --device auto
+# 自动 ROI（YOLO）示例（可叠加 --save-crops 保存裁剪）
+uv run python -m yolovisualaids.vision.traffic_cli --image .\traffic_img\demo.jpg --auto --model models/yolo/yolo11n.pt --conf 0.5 --device auto
 ```
 
 可选参数：
@@ -162,16 +154,16 @@ uv run python run_traffic.py --image .\traffic_img\demo.jpg --auto --model yolo1
 2) 运行监听器（麦克风权限需开启）：
 
 ```powershell
-uv run python keyword_listener.py --model "D:\\models\\vosk-model-small-cn-0.22" --keywords 开始 停止 退出
+uv run python -m yolovisualaids.voice.keyword_listener --model ".\\models\\vosk\\vosk-model-small-cn-0.22" --keywords 开始 停止 退出
 ```
 
 集成到你的代码：
 
 ```python
-from keyword_listener import KeywordListener
+from yolovisualaids.voice.keyword_listener import KeywordListener
 
 kl = KeywordListener(
-  model_path="D:\\models\\vosk-model-small-cn-0.22",
+  model_path=".\\models\\vosk\\vosk-model-small-cn-0.22",
   keywords=["开始", "停止", "保存图片", "退出"],
 )
 
@@ -190,7 +182,7 @@ kl.stop()
 
 所有参数既可由命令行传入，也可使用环境变量覆盖默认值（前缀 `YV_`）：
 
-- `MODEL_PATH` → `--model`（默认 `yolo11n.pt`）
+- `MODEL_PATH` → `--model`（默认 `models/yolo/yolo11n.pt`）
 - `DEVICE` → `--device`（默认 `auto`）
 - `SOURCE` → `--source`（默认 `0`，纯数字且长度<6 视为摄像头索引）
 - `SAVE_DIR` → `--save-dir`（默认 `results`）
@@ -212,10 +204,10 @@ kl.stop()
 示例（PowerShell）：
 
 ```powershell
-$env:YV_MODEL_PATH = "D:\\models\\yolo11n.pt"
+$env:YV_MODEL_PATH = ".\\models\\yolo\\yolo11n.pt"
 $env:YV_SOURCE = "0"
 $env:YV_CONF = "0.45"
-uv run python YOLO_detection.py --save-txt
+uv run python -m yolovisualaids.detection --save-txt
 ```
 
 

@@ -1,10 +1,3 @@
-"""交通灯颜色测试模式的实现。
-
-提供 run(args) 给 test.py 调用，支持：
-- 图片/目录/摄像头
-- 手动 ROI（交互/参数）或 YOLO 自动识别裁剪
-"""
-
 from __future__ import annotations
 
 from pathlib import Path
@@ -12,12 +5,12 @@ from typing import Any, NamedTuple
 
 import cv2
 
-from announce import Announcer
-from color_detction import detect_traffic_light_color
-from roi_utils import clamp_roi, iter_images_from_dir, pick_roi_interactive
-from yolo_utils import YOLOAutoDetector, YOLOOpts, parse_img_size
+from detection.yolo_utils import YOLOAutoDetector, YOLOOpts, parse_img_size
+from vision.color_detection import detect_traffic_light_color
+from vision.roi_utils import (clamp_roi, iter_images_from_dir,
+                              pick_roi_interactive)
+from voice import Announcer
 
-# 类型别名
 ROI = tuple[int, int, int, int]
 
 
@@ -25,7 +18,6 @@ def _color_bgr(name: str) -> tuple[int, int, int]:
     return (0, 200, 255) if name == "yellow" else ((0, 255, 0) if name == "green" else (0, 0, 255))
 
 
-# 语音播报器（模块内复用，避免重复初始化）
 _ANN = Announcer(min_interval_sec=1.5)
 
 
@@ -45,12 +37,11 @@ def _save_crop(save_dir: Path, filename: str, roi) -> None:
     try:
         save_dir.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(save_dir / filename), roi)
-    except (OSError, cv2.error) as e:  # type: ignore[attr-defined]
+    except (OSError, cv2.error) as e:
         print(f"保存裁剪失败: {e}")
 
 
 def _wait_key(delay: int = 0) -> int:
-    """显示后等待按键，返回按键码（低 8 位）。"""
     return cv2.waitKey(delay) & 0xFF
 
 
@@ -64,7 +55,7 @@ def _log_and_say(base_name: str, status: str, *, extra: str = "") -> None:
 
 
 def _maybe_save_crop(args, *, is_cam: bool, base_name: str, box, img) -> None:
-    if not getattr(args, 'save_crops', ''):
+    if not getattr(args, "save_crops", ""):
         return
     sd = Path(args.save_crops)
     x1, y1, x2, y2, _ = box
@@ -96,12 +87,11 @@ def _box_color(img, b) -> str:
 def _draw_box(out_img, b, label: str, color_name: str | None = None) -> None:
     x1, y1, x2, y2, _ = b
     cv2.rectangle(out_img, (x1, y1), (x2, y2), (0, 255, 255), 2)
-    color_disp = _color_bgr(color_name or 'yellow')
+    color_disp = _color_bgr(color_name or "yellow")
     cv2.putText(out_img, label, (x1, max(10, y1 - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_disp, 2, cv2.LINE_AA)
 
 
 def _horizontal_logic(img, out_img, hori_boxes):
-    """基于横向灯集合决策并绘制，返回 (out_img, status)。不负责播报/打印。"""
     if not hori_boxes:
         st = "无红绿灯"
         cv2.putText(out_img, st, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2, cv2.LINE_AA)
@@ -128,7 +118,6 @@ def _horizontal_logic(img, out_img, hori_boxes):
         cv2.putText(out_img, st, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 255), 2, cv2.LINE_AA)
         return out_img, st
 
-    # 单灯情形
     hb = hori_boxes[0]
     c = _box_color(img, hb)
     st = c if c in {"red", "yellow", "green"} else "红绿灯不工作"
@@ -144,7 +133,6 @@ class Scene(NamedTuple):
 
 
 def _vertical_logic(scene: Scene, args, *, base_name: str, is_cam: bool):
-    """基于竖向灯集合决策并绘制，返回 (out_img, status, handled)。"""
     img, out_img, vert_boxes, hori_boxes = scene
     handled = False
     status: str | None = None
@@ -165,7 +153,6 @@ def _vertical_logic(scene: Scene, args, *, base_name: str, is_cam: bool):
             else:
                 out_img, status = _horizontal_logic(img, out_img, hori_boxes)
         return out_img, status, handled
-    # 恰好 1 个竖向
     vb = vert_boxes[0]
     c = _box_color(img, vb)
     if c in {"red", "yellow", "green"}:
@@ -189,17 +176,9 @@ def _auto_draw_and_save(
     *,
     is_cam: bool = False,
 ) -> tuple[Any, str]:
-    """运行 YOLO 并按指定规则决策，绘制、可选保存裁剪，并返回状态信号。
-
-    状态信号只会是以下之一：
-    - 'red' | 'yellow' | 'green'
-    - '颜色不同' | '红绿灯不工作' | '无红绿灯'
-    """
     vert_boxes, hori_boxes = detector.detect_orientations(img)
     out = img.copy()
     status: str | None = None
-
-    # 1) 是否存在竖向红绿灯？
     out, status, handled = _vertical_logic(Scene(img, out, vert_boxes, hori_boxes), args, base_name=base_name, is_cam=is_cam)
     if not handled:
         if hori_boxes:
@@ -207,8 +186,6 @@ def _auto_draw_and_save(
         else:
             status = "无红绿灯"
             _put_status(out, status)
-
-    # 统一打印与播报
     extra = ""
     if not (vert_boxes or hori_boxes):
         extra = f" (class-id={getattr(args, 'class_id', 9)})"
@@ -309,15 +286,12 @@ def _handle_cam(args, detector: YOLOAutoDetector | None, roi_rect: ROI | None, w
 
 
 def run(args) -> None:
-    """入口：根据参数选择图片/目录/摄像头模式，并委托给对应处理器。"""
     win = getattr(args, 'win', 'traffic-test')
     cv2.namedWindow(win, cv2.WINDOW_NORMAL)
-
-    # YOLO 自动检测（按需）
     detector: YOLOAutoDetector | None = None
     if getattr(args, 'auto', False):
         opts = YOLOOpts(
-            model_path=getattr(args, 'model', 'yolo11n.pt'),
+            model_path=getattr(args, 'model', 'models/yolo/yolo11n.pt'),
             conf=float(getattr(args, 'conf', 0.5)),
             img_size=parse_img_size(getattr(args, 'img_size', '')),
             device=getattr(args, 'device', 'auto'),
@@ -325,19 +299,14 @@ def run(args) -> None:
             first_only=bool(getattr(args, 'first', False)),
         )
         detector = YOLOAutoDetector(opts)
-
     roi_rect: ROI | None = tuple(args.roi) if getattr(args, 'roi', None) else None
-
     if getattr(args, 'image', None):
         _handle_image(args, detector, roi_rect, win)
         return
-
     if getattr(args, 'dir', None):
         _handle_dir(args, detector, roi_rect, win)
         return
-
     if getattr(args, 'cam', None) is not None:
         _handle_cam(args, detector, roi_rect, win)
         return
-
     print("未指定 --image/--dir/--cam")
