@@ -38,6 +38,44 @@ uv run python -V
 - 只用 CLI 时，可跳过 GUI 依赖，但使用 `uv sync` 会按 `pyproject.toml` 全量安装。
 
 
+## Windows 摄像头友好名称（pywin32/WMI 或 pygrabber）
+
+为在 Windows 下显示更友好的摄像头名称（而不是仅有的 `Camera n` 索引），项目提供两条可选路径：
+
+- WMI（pywin32）：由 `yva_io/camera_name.py` 调用 WMI，返回较“丰富”的设备信息（名称、状态、PNP 类等）。
+- DirectShow（pygrabber）：由 `yva_io/camera_utils.py` 直接枚举 DirectShow 输入设备，速度快、依赖少。
+
+依赖状态与默认行为：
+- 这两个依赖已在 `pyproject.toml` 声明（`pywin32>=311`、`pygrabber>=0.2`）。在 Windows 上执行 `uv sync` 会自动安装；非 Windows 环境会自动跳过。
+- 若两者均不可用或调用失败，界面/CLI 会回退显示 `Camera n`。
+
+安装与验证（PowerShell）：
+
+```powershell
+# 安装/同步依赖（Windows 下会包含 pywin32 和 pygrabber）
+uv sync
+
+# 可选：单独添加（通常无需，因为已在 pyproject.toml 中）
+uv add pywin32 pygrabber
+
+# 自检：打印 DirectShow 设备名（pygrabber）
+uv run python -c "from yva_io import get_directshow_device_names as g; print(g())"
+
+# 自检：打印 WMI 设备（pywin32）
+uv run python -c "from yva_io import enumerate_cameras as e; print([d.to_dict() for d in e(verbose=True)])"
+```
+
+使用建议与注意事项：
+- 优先级：WMI 与 DirectShow 信息来源不同，项目内部会按场景择优使用；二者皆无时回退 `Camera n`。
+- 顺序与索引：DirectShow 的枚举顺序与 OpenCV 的摄像头索引通常一致，但不保证 100% 对齐；发生不一致时，以能成功打开的索引为准。
+- 虚拟摄像头：可能出现重复/虚拟设备（如会议软件虚拟摄像头）；可在系统设备管理器中禁用无关设备以简化列表。
+- 故障排查：
+  - 运行上面的“自检命令”，确认能否列出设备；
+  - 以管理员身份重试（少数机器的 WMI 权限问题会导致失败）；
+  - 设置环境变量 `CAM_VERBOSE=1` 查看 `yva_io/camera_name.py` 的详细日志。
+
+
+
 ## 快速开始
 
 项目提供一个统一入口 `main.py`，以及可直接运行的模块入口。
